@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "sites": [
+    {
+      "name": "example",
+      "title": "Example Papers",
+      "about": "ПЛЕЙСХОЛДЕР: замените на описание своей базы (темы, языки, типы документов)",
+      "search_url": "https://api.example.org/v1/search",
+      "query_param": "q",
+      "static_params": {
+        "format": "json"
+      },
+      "query_style": "boolean",
+      "op_and": " AND ",
+      "op_or": " OR ",
+      "op_not": " NOT ",
+      "quote_phrases": true,
+      "query_template": "{query}",
+      "year_from_param": "from_year",
+      "year_from_fmt": "{year}",
+      "year_to_param": "to_year",
+      "year_to_fmt": "{year}",
+      "oa_param": "open_access",
+      "oa_value": "true",
+      "limit_param": "per_page",
+      "max_per_request": 50,
+      "pagination": "page",
+      "page_param": "page",
+      "page_start": 1,
+      "key_env": "",
+      "key_param": "",
+      "key_header": "",
+      "key_prefix": "",
+      "min_interval": 1.0,
+      "results_path": "data.items",
+      "total_path": "meta.total",
+      "fields": {
+        "title": "title",
+        "authors": "authors[].name",
+        "year": "published",
+        "doi": "doi",
+        "abstract": "abstract",
+        "pdf_url": "links.pdf",
+        "url": "url"
+      },
+      "notes": "ПЛЕЙСХОЛДЕР: синтаксис, лимиты, подводные камни",
+      "enabled": false
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "_comment": "Жёсткие правила, которые код соблюдает всегда. Составлено по литературному обзору 'Поиск научных статей: программный доступ' (10.11.2026). Числа лимитов нужно сверять с официальными страницами сервисов.",
+  "default_min_interval": 1.0,
+  "intervals": {
+    "eutils.ncbi.nlm.nih.gov": 0.34,
+    "www.ncbi.nlm.nih.gov": 0.5,
+    "ftp.ncbi.nlm.nih.gov": 1.0,
+    "export.arxiv.org": 3.1,
+    "api.crossref.org": 0.4,
+    "api.openalex.org": 0.2,
+    "api.semanticscholar.org": 1.1,
+    "www.ebi.ac.uk": 0.35,
+    "doaj.org": 0.55,
+    "api.unpaywall.org": 0.15,
+    "api.core.ac.uk": 1.0
+  },
+  "blocked_url_patterns": [
+    "://(www\\.)?ncbi\\.nlm\\.nih\\.gov/pmc/(?!utils/oa/)",
+    "://pmc\\.ncbi\\.nlm\\.nih\\.gov",
+    "://pubmed\\.ncbi\\.nlm\\.nih\\.gov",
+    "://scholar\\.google\\.",
+    "sci-hub",
+    "libgen",
+    "annas-archive|anna-archive",
+    "z-lib|zlibrary"
+  ],
+  "forbidden_sources": {
+    "google_scholar": "Официального API нет; автоматические запросы запрещены условиями, результат — CAPTCHA и бан IP.",
+    "elibrary": "Открытого поискового API не найдено; автоматизация HTML не реализуется.",
+    "cyberleninka": "Документированного API нет; автоматизация HTML не реализуется.",
+    "base": "API только для зарегистрированных заранее IP/User-Agent.",
+    "scopus": "Нужны подписка и ключ Elsevier; в этот инструмент не входит.",
+    "web_of_science": "Нужна платная лицензия; в этот инструмент не входит.",
+    "ieee": "Платный/ограниченный доступ; в этот инструмент не входит.",
+    "pmc_website": "Сайт PMC (pmc.ncbi.nlm.nih.gov, ncbi.nlm.nih.gov/pmc/articles) для программ закрыт: массовая загрузка запрещена, нужны официальные каналы — E-utilities (поиск, db=pmc), OA Web Service и FTP по https (PDF/пакеты Open Access Subset), Europe PMC REST."
+  },
+  "rules": [
+    "Use only official APIs; never scrape HTML result pages.",
+    "Never bypass CAPTCHA, rotate IPs, or fake the User-Agent.",
+    "A 403/401 response means STOP for that host: do not retry.",
+    "arXiv: at most one request per 3 seconds, a single connection; automated access only through export.arxiv.org.",
+    "PMC main site (pmc.ncbi.nlm.nih.gov, ncbi.nlm.nih.gov/pmc/articles) is never accessed. PMC is used only through official channels: E-utilities (db=pmc) for search, the PMC OA Web Service (oa.fcgi) with ftp.ncbi.nlm.nih.gov over https for Open Access Subset PDFs, Europe PMC REST for XML, Unpaywall links.",
+    "OpenAlex needs a free API key (since 2026-02-13). Crossref needs a mailto (polite pool).",
+    "Full texts are downloaded only from legal open-access locations (Unpaywall, OpenAlex, Europe PMC, CORE, arXiv, Semantic Scholar openAccessPdf). Shadow libraries are never used.",
+    "Google Scholar, eLIBRARY.RU, CyberLeninka, BASE are NOT available to this agent."
+  ],
+  "sources": {
+    "pubmed": {
+      "about": "Biomedicine and life sciences: PubMed (MEDLINE, MeSH; abstracts) plus the PMC full-text archive (db=pmc), both searched with one query. PDFs of the PMC Open Access Subset are downloadable.",
+      "hint": "Field tags in brackets: [tiab] title/abstract, [ti], [au], [mh] MeSH, [pt] publication type, [dp] date. Wrong tags are silently ignored; always check querytranslation. New papers lack MeSH, so combine [mh] with [tiab]."
+    },
+    "europepmc": {
+      "about": "Life sciences: PubMed + PMC + preprints (bioRxiv, medRxiv) + patents. Searches full text of open articles. Good source of legal full-text XML.",
+      "hint": "Lucene-like: TITLE:\"x\", ABSTRACT:\"x\", PUB_YEAR:[2020 TO 2026], OPEN_ACCESS:y, HAS_FT:y. Synonym expansion is on by default."
+    },
+    "arxiv": {
+      "about": "Preprints: physics, mathematics, computer science, q-bio, q-fin, statistics, eess, economics.",
+      "hint": "Prefixes ti:, abs:, au:, cat:, all:; operators AND, OR, ANDNOT; submittedDate:[YYYYMMDDHHMM TO YYYYMMDDHHMM]. Errors can arrive as an Atom entry, not as an HTTP code. English keywords only."
+    },
+    "openalex": {
+      "about": "All sciences; open catalog of works, authors, institutions. Needs a free API key. Good general-purpose first source.",
+      "hint": "search= supports AND/OR/NOT in uppercase and quotes; filters: publication_year, is_oa, type. Abstracts are inverted indexes."
+    },
+    "crossref": {
+      "about": "DOI metadata for ~180M records; licenses, funders, references. Abstracts often missing. No boolean operators.",
+      "hint": "query= is plain relevance search (no boolean). Filters: from-pub-date, until-pub-date, type:journal-article, has-abstract:true. Always send mailto."
+    },
+    "semanticscholar": {
+      "about": "All sciences, strongest in computer science / AI; citation counts; links to open-access PDFs.",
+      "hint": "Relevance search is plain keywords (no boolean), depth limited to ~1000 results. Without an API key the shared pool often returns 429."
+    },
+    "core": {
+      "about": "Aggregator of open-access repositories, full texts (needs a free API key).",
+      "hint": "q= supports AND/OR and field filters such as yearPublished>=2020. Search endpoints need a trailing slash."
+    },
+    "doaj": {
+      "about": "Curated directory of peer-reviewed open-access journals and their articles.",
+      "hint": "Elasticsearch query_string over bibjson.title, bibjson.abstract, bibjson.year. 2 requests per second."
+    }
+  }
+}

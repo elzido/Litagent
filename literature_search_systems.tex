@@ -1,0 +1,899 @@
+% !TEX program = xelatex
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{russian}
+\setotherlanguage{english}
+\setmainfont{DejaVu Serif}[Scale=0.9]
+\setsansfont{DejaVu Sans}[Scale=0.9]
+\setmonofont{DejaVu Sans Mono}[Scale=0.82]
+
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{xcolor}
+\usepackage{booktabs,longtable,tabularx,array,enumitem,pdflscape,microtype,ragged2e}
+\usepackage{fancyhdr,titlesec}
+\usepackage{tocloft}
+\setlength{\cftsecnumwidth}{2em}
+\setlength{\cftsubsecnumwidth}{3em}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{okgreen}{HTML}{2E7D32}
+\definecolor{warnred}{HTML}{B71C1C}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent,citecolor=accent}
+\Urlmuskip=0mu plus 1mu\relax
+\makeatletter\g@addto@macro\UrlBreaks{\do\-\do\_\do\=\do\&}\makeatother
+\setlength{\emergencystretch}{3em}
+
+\setlist{itemsep=2pt,topsep=4pt,parsep=0pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+
+\titleformat{\section}{\Large\sffamily\bfseries\color{accent}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\sffamily\bfseries\color{accent}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\sffamily\bfseries}{\thesubsubsection}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily Поиск научных статей: программный доступ}
+\fancyhead[R]{\small\sffamily\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+
+% ---------- listings ----------
+\lstdefinestyle{py}{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{accent}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{okgreen!70!black},
+  breaklines=true,
+  breakatwhitespace=false,
+  frame=single,
+  rulecolor=\color{black!25},
+  backgroundcolor=\color{black!3},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  aboveskip=6pt,
+  belowskip=4pt
+}
+\lstdefinestyle{plain}{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{black!25},
+  backgroundcolor=\color{black!3},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  aboveskip=6pt,
+  belowskip=4pt
+}
+\lstset{style=py}
+
+% ---------- cards ----------
+\newtcolorbox{syscard}[1]{
+  breakable,
+  enhanced,
+  colback=black!2,
+  colframe=accent!70,
+  coltitle=white,
+  fonttitle=\sffamily\bfseries,
+  title={#1},
+  left=6pt,right=6pt,top=4pt,bottom=2pt,
+  boxrule=0.6pt,
+  arc=2pt
+}
+\newcommand{\row}[2]{\noindent{\sffamily\bfseries\small\color{accent}#1.}\ #2\par\vspace{3pt}}
+
+\newtcolorbox{warnbox}[1][Важно]{
+  breakable,colback=warnred!5,colframe=warnred!70!black,
+  coltitle=white,fonttitle=\sffamily\bfseries,title={#1},
+  left=6pt,right=6pt,top=3pt,bottom=3pt,arc=2pt,boxrule=0.6pt
+}
+\newtcolorbox{notebox}[1][Замечание]{
+  breakable,colback=accent!5,colframe=accent!70,
+  coltitle=white,fonttitle=\sffamily\bfseries,title={#1},
+  left=6pt,right=6pt,top=3pt,bottom=3pt,arc=2pt,boxrule=0.6pt
+}
+
+\title{\sffamily\bfseries\color{accent}
+Поиск научных статей в разных системах:\\[2pt]
+программный доступ, особенности, ограничения\\и блокировка веб-агентов}
+\author{}
+\date{10 ноября 2026\,г.}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstract}
+\noindent Документ описывает более двадцати систем поиска научной литературы с точки зрения автоматизации: на что ориентирована каждая система, как получить доступ из кода (API, OAI-PMH, дампы), какие нужны ключи, каков синтаксис запросов, какие действуют лимиты и как система относится к автоматическим клиентам, то есть блокирует ли она веб-агентов. Для основных систем приведены примеры на Python. В конце даны сводные таблицы, рекомендации по выбору источников, универсальный клиент с корректной обработкой лимитов и скрипт для самостоятельной проверки доступности систем из вашей сети.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =====================================================================
+\section{Как читать этот документ}
+% =====================================================================
+
+\subsection{Методика и степень достоверности}
+
+Сведения собраны 10 ноября 2026\,г. из официальной документации, страниц политик использования, анонсов изменений и вторичных источников (описания клиентских библиотек, форумы, обзоры). Лимиты и условия доступа у многих сервисов менялись в 2025--2026 годах, поэтому для каждой системы указан \emph{статус данных}:
+
+\begin{itemize}
+  \item \textbf{официальные} --- подтверждено документацией или анонсом самого сервиса;
+  \item \textbf{вторичные} --- взято из сторонних описаний, официальную страницу подтвердить не удалось;
+  \item \textbf{противоречивые} --- разные источники называют разные цифры; нужно проверить на странице сервиса или самим запросом.
+\end{itemize}
+
+\begin{warnbox}[Что не было проверено]
+Прямых тестовых запросов к сайтам я не делал: из рабочей среды исходящая сеть для оболочки закрыта, а попытка получить \code{robots.txt} нескольких сайтов штатным загрузчиком была отклонена. Поэтому выводы о блокировке веб-агентов опираются на документацию, политики сервисов и описания реальных блокировок, но не на живой тест. В разделе~\ref{sec:probe} приведён скрипт, который проверит всё это из вашей сети за пару минут.
+\end{warnbox}
+
+\subsection{Основные термины}
+
+\begin{description}[leftmargin=2.2cm,style=nextline]
+  \item[API-ключ] Токен, который выдают после бесплатной или платной регистрации. Обычно повышает лимиты и позволяет сервису связаться с вами.
+  \item[Polite pool] Приоритетный пул у Crossref и OpenAlex (ранее): запрос содержит контактный e-mail (\code{mailto=}), за это дают более высокие лимиты.
+  \item[Пагинация курсором] Выдача страницами через токен (\code{cursor}, \code{cursorMark}, \code{scroll}); в отличие от \code{offset} не упирается в потолок глубины.
+  \item[OAI-PMH] Стандартный протокол массового сбора метаданных из репозиториев.
+  \item[Снапшот (дамп)] Полная копия базы для локальной работы; когда нужны миллионы записей, это правильнее, чем API.
+  \item[Веб-агент / бот] Автоматический клиент. Часть сервисов считает ботом любой клиент без браузера и блокирует его на уровне HTML-страниц, но разрешает на официальном API.
+\end{description}
+
+\subsection{Общий принцип выбора канала доступа}
+
+Для автоматизации всегда следует идти по лестнице от «разрешённого» к «терпимому», а не наоборот:
+
+\begin{enumerate}
+  \item \textbf{Официальный API} --- для поиска и точечных запросов.
+  \item \textbf{Снапшот или OAI-PMH} --- для массовой выгрузки.
+  \item \textbf{Разбор HTML} --- только если система явно не запрещает это и других путей нет. Для большинства систем из этого документа HTML-скрейпинг запрещён или приводит к блокировке.
+\end{enumerate}
+
+\begin{notebox}[Граница, которую документ не переходит]
+Здесь не описаны способы обхода CAPTCHA, ротации IP-адресов, подмены User-Agent и прочие приёмы обхода защиты. Если сервис блокирует автоматический доступ, правильный ответ --- другой источник, снапшот или обращение к владельцам сервиса за повышенным лимитом.
+\end{notebox}
+
+% =====================================================================
+\begin{landscape}
+\thispagestyle{empty}\pagestyle{empty}
+\section{Сводная таблица систем}
+\small
+\setlength{\tabcolsep}{5pt}
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.7cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{6.2cm}>{\raggedright\arraybackslash}p{7.6cm}}
+\toprule
+\textbf{Система} & \textbf{Область} & \textbf{Ключ} & \textbf{Лимиты (кратко)} & \textbf{Автоматизация и блокировки}\\
+\midrule
+\endhead
+PubMed (E-utilities) & Биомедицина, MEDLINE, MeSH & Необязателен, бесплатный & 3 запр./с без ключа, 10 с ключом; до 10\,000 ID за ESearch & API разрешён. HTML-скрейпинг: блокировка IP («Access Denied», misuse).\\
+PubMed Central (PMC) & Полные тексты биомедицинских статей & Не нужен & Через OAI-PMH, FTP, Cloud; E-utilities для метаданных & Систематическая выгрузка с основного сайта запрещена, IP блокируется. Разрешены только OAI-PMH, FTP, Cloud.\\
+Europe PMC & Науки о жизни, препринты, патенты & Не нужен & Официальные числа не подтверждены; начинайте с 1--3 запр./с & API открыт; по сообщению стороннего описания, \code{robots.txt} разрешает путь REST API.\\
+arXiv & Физика, математика, CS, q-bio, q-fin, stat, econ & Не нужен & 1 запрос/3\,с, одно соединение; не более 30\,000 результатов; срезы до 2000 & API на \code{export.arxiv.org}. Основной сайт: «Robots Beware», при нарушении 403 и блокировка.\\
+OpenAlex & Все науки; граф работ, авторов, организаций & \textbf{Обязателен} с 13.02.2026, бесплатный & Дневной бюджет в долларах (с ключом \$1/день; цифры расходятся); до 100 запр./с; одиночные записи бесплатны & API-first, ключ обязателен. Полный снапшот бесплатно (CC0).\\
+Crossref & DOI-метаданные, ссылки, лицензии & Не нужен; нужен \code{mailto} & С 21.07.2026: одиночная запись 5/с (public), 10/с (polite); списки 1/с и 3/с & API для машин; 429 при превышении; лимит привязан к e-mail.\\
+Semantic Scholar & Все науки, акцент CS/AI; цитаты, TLDR & Бесплатный, рекомендован & С ключом стартово 1 запр./с; без ключа общий пул, часто 429 & Официальный API. Для больших объёмов есть датасеты.\\
+CORE & Агрегатор открытого доступа, полные тексты & Бесплатный, желателен & Токены в день, зависят от типа аккаунта (вторичные данные) & API v3; полный текст только с ключом.\\
+Unpaywall & Статус OA и ссылки на легальные копии по DOI & Нужен только e-mail & 100\,000 запросов/день (рекомендация) & API разрешён; снапшот для больших объёмов.\\
+DOAJ & Рецензируемые OA-журналы и статьи & Не нужен для поиска & 2 запр./с, очередь пачек до 5 & Публичный API, троттлинг.\\
+dblp & Информатика, библиография & Не нужен & 429 с \code{Retry-After}; конкретных цифр нет & Скрейпинг разрешён по FAQ, но сторонние клиенты сообщают о bot-check на \code{dblp.org}; есть XML-дамп и SPARQL.\\
+NASA ADS / SciX & Астрономия, астрофизика, физика, науки о Земле & Токен бесплатно & 5000 запросов/день & API с токеном; заголовки \code{X-RateLimit-*}.\\
+OpenAIRE & Европейский открытый граф научных продуктов & Токен опционален & 60 запр./час без токена, 7200/час с токеном & API разрешён, лицензия CC-BY.\\
+Lens.org & Статьи и патенты, связи между ними & Токен, нужен запрос доступа & Зависит от плана (в одном вузовском плане 5000 запросов/мес, 10/мин) & Платный или по заявке; доступ только через токен.\\
+BASE & Агрегатор репозиториев (400+ млн документов) & Белый список IP & Не публикуются & Веб-портал открыт, API только для заранее зарегистрированных IP и User-Agent.\\
+Scopus & Мульти\-дисци\-плинар\-ный индекс цитирования & Elsevier API key + подписка & Недельные квоты (Search 20\,000/нед, около 9 запр./с) & Только по ключу; полный функционал через IP вуза или institutional token.\\
+Web of Science & Мульти\-дисци\-плинар\-ный индекс цитирования & Ключ + платная лицензия & По плану подписки & Starter API входит в подписку Core Collection; Expanded --- платный.\\
+IEEE Xplore & Инженерия, электроника, CS & Бесплатный ключ & Около 200 запросов/день, до 200 записей в ответе (вторичные данные) & API по ключу; полный текст только для подписчиков.\\
+Springer Nature & Журналы и книги Springer Nature & Бесплатный ключ & Basic: 500 обращений/день, 100/мин (OA API) & Meta и Open Access API; Premium по договору.\\
+Google Scholar & Мульти\-дисци\-плинар\-ный, самый широкий охват & Официального API нет & --- & Автоматические запросы запрещены условиями; блокировка и CAPTCHA.\\
+eLIBRARY.RU, КиберЛенинка & Русскоязычная литература & Для части функций eLIBRARY нужен apiKey & Не подтверждено & Открытого поискового API не обнаружено; требуется отдельная проверка.\\
+\bottomrule
+\end{longtable}
+\end{landscape}
+\pagestyle{fancy}
+
+% =====================================================================
+\section{Карточки систем}
+% =====================================================================
+
+Для каждой системы указано: на что она ориентирована, как подключиться, какие лимиты действуют, как строится запрос, как она относится к автоматическим клиентам и какова достоверность данных.
+
+% ---------------------------------------------------------------------
+\subsection{PubMed и NCBI E-utilities}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{PubMed (NLM / NCBI)}
+\row{Фокус}{Биомедицина и науки о жизни. Индексирует метаданные (названия, аннотации, MeSH-термины), не полные тексты. Базовый инструмент систематических обзоров в медицине.}
+\row{Программный доступ}{Набор E-utilities: \code{esearch} (поиск ID), \code{efetch} (полные записи), \code{esummary} (краткие сведения), \code{elink}, \code{epost}, \code{einfo}. Адрес: \url{https://eutils.ncbi.nlm.nih.gov/entrez/eutils/}. Ключ выдаётся бесплатно в аккаунте NCBI (Settings $\rightarrow$ API Key Management); в запросах стоит указывать параметры \code{tool} и \code{email}.}
+\row{Лимиты}{3 запроса/с без ключа, 10/с с ключом. Более высокий лимит для ключа можно запросить письмом в NCBI с обоснованием. При превышении --- HTTP 429. ESearch возвращает не более 10\,000 ID за вызов; для больших выборок используйте history server (\code{usehistory=y}, \code{WebEnv}, \code{query_key}) или дробите запрос по датам.}
+\row{Синтаксис запросов}{Булевы операторы \code{AND}, \code{OR}, \code{NOT}; поля в квадратных скобках: \code{[ti]} название, \code{[ab]} аннотация, \code{[tiab]} название или аннотация, \code{[au]} автор, \code{[ta]} журнал, \code{[mh]} термин MeSH (с автоматическим включением узких терминов), \code{[majr]} основной MeSH-термин, \code{[pt]} тип публикации, \code{[dp]} или \code{[pdat]} дата, \code{[la]} язык, \code{[sb]} подмножество (например, \code{free full text[sb]}). Диапазон дат: \code{2020:2026[dp]}. Близость слов: \code{"asthma treatment"[Title:~3]}.}
+\row{Подводные камни}{Несуществующий тег поля может быть молча проигнорирован: PubMed включает автоматическое сопоставление терминов (automatic term mapping). Всегда проверяйте поле \code{querytranslation} в ответе ESearch, чтобы убедиться, что запрос понят так, как вы хотели. Очень свежие статьи ещё не получили MeSH, поэтому сочетайте \code{[mh]} с \code{[tiab]}.}
+\row{Блокировка веб-агентов}{Для API --- нет, он предназначен для машин. Для веб-интерфейса картина обратная: при подозрении на скрейпинг NCBI блокирует IP-адрес и показывает страницу «Access Denied \ldots{} possible misuse/abuse» (сервер \code{misuse.ncbi.nlm.nih.gov}); в тексте блокировки прямо рекомендуется освоить E-utilities. Вывод: ходить только через E-utilities.}
+\row{Статус данных}{Официальные (руководство E-utilities на NCBI Bookshelf, NBK25497 и NBK25499); описания блокировок подтверждены страницами «Access Denied» в поисковой выдаче.}
+\end{syscard}
+
+\begin{lstlisting}[caption={PubMed: поиск через ESearch и выгрузка через EFetch с history server}]
+import requests, time
+
+BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+COMMON = {"tool": "litsearch", "email": "you@example.org"}   # add "api_key": "..." if you have one
+
+def pubmed_search(term, retmax=200):
+    r = requests.get(BASE + "esearch.fcgi", params={
+        **COMMON, "db": "pubmed", "term": term, "retmax": retmax,
+        "usehistory": "y", "retmode": "json"}, timeout=60)
+    r.raise_for_status()
+    res = r.json()["esearchresult"]
+    print("translation:", res.get("querytranslation"))   # check how PubMed interpreted the query
+    return int(res["count"]), res["webenv"], res["querykey"]
+
+def pubmed_fetch(webenv, query_key, start=0, n=200):
+    r = requests.get(BASE + "efetch.fcgi", params={
+        **COMMON, "db": "pubmed", "WebEnv": webenv, "query_key": query_key,
+        "retstart": start, "retmax": n, "rettype": "abstract", "retmode": "xml"}, timeout=120)
+    r.raise_for_status()
+    return r.text
+
+count, webenv, qk = pubmed_search('"sickle cell disease"[mh] AND CRISPR[tiab] AND 2020:2026[dp]')
+for start in range(0, count, 200):
+    xml = pubmed_fetch(webenv, qk, start)
+    # ... parse xml (e.g. with xml.etree.ElementTree) ...
+    time.sleep(0.4)          # stay under 3 requests/second without a key
+\end{lstlisting}
+
+% ---------------------------------------------------------------------
+\subsection{PubMed Central (PMC)}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{PubMed Central (NLM)}
+\row{Фокус}{Архив полных текстов биомедицинских и биологических статей; часть материалов в открытом доступе (Open Access Subset и другие наборы с разрешающими лицензиями).}
+\row{Программный доступ}{Метаданные можно искать теми же E-utilities (\code{db=pmc}). Для массовой выгрузки текстов разрешены только специальные сервисы: OAI-PMH, FTP и PMC Cloud Service.}
+\row{Лимиты}{Действуют общие лимиты E-utilities (см.\ выше). Для FTP и Cloud ограничения определяются условиями набора данных и лицензией конкретных статей.}
+\row{Синтаксис запросов}{Как в PubMed (теги полей в квадратных скобках), с несколькими специфичными полями PMC.}
+\row{Блокировка веб-агентов}{Да, и документ об авторском праве PMC формулирует это жёстко: систематическая загрузка пакетов статей с основного сайта PMC любым способом запрещена из-за ограничений авторского права; перечисленные три сервиса (OAI-PMH, FTP, Cloud) названы единственными разрешёнными путями автоматической загрузки, и нельзя использовать другие автоматические процессы даже для статей из Open Access Subset. Нарушителей блокируют по IP-диапазону.}
+\row{Статус данных}{Официальные (PMC Copyright Notice, процитированный и пересказанный в библиотечных руководствах).}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{Europe PMC}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Europe PMC (EMBL-EBI)}
+\row{Фокус}{Науки о жизни: надмножество PubMed, включает PMC, препринты (bioRxiv, medRxiv и др.), патенты, диссертации. Поиск идёт и по метаданным, и по полным текстам открытых статей. Есть Annotations API с текстовой разметкой (гены, заболевания, химические соединения).}
+\row{Программный доступ}{REST API: \url{https://www.ebi.ac.uk/europepmc/webservices/rest/}. Ключ не нужен. Методы: \code{search}, поиск по идентификатору, цитирующие и цитируемые работы, ссылки на сторонние ресурсы, полные тексты PMC в XML. Клиенты есть для R (\code{europepmc}) и Python.}
+\row{Лимиты}{Подтверждённых официальных числовых лимитов найти не удалось. Разумно начинать с 1--3 запросов/с и увеличивать осторожно, обрабатывая 429 и 5xx с экспоненциальной паузой.}
+\row{Синтаксис запросов}{Язык в духе Lucene: \code{TITLE:"gut microbiome"}, \code{DOI:10.1007/bf00197367}, \code{EXT_ID:22246381} (PMID), \code{ISSN:1553-7404}. Поля вроде \code{OPEN_ACCESS}, \code{HAS_FT}, \code{PUB_YEAR}, \code{SRC} описаны в справке Europe PMC; удобно собрать запрос в Advanced Search Query Builder и скопировать строку. По умолчанию включается расширение синонимами (MeSH и UniProt): чтобы совпадать с сайтом, оставляйте его включённым, чтобы получить точный запрос --- отключайте (\code{synonym=FALSE} в R-клиенте).}
+\row{Пагинация}{Курсором: параметр \code{cursorMark} (начните с \code{*}), в ответе приходит \code{nextCursorMark}; размер страницы \code{pageSize} до 1000.}
+\row{Блокировка веб-агентов}{Для API не обнаружено; по описанию стороннего инструмента, \code{robots.txt} хоста \code{www.ebi.ac.uk} разрешает путь \code{/europepmc/webservices/rest/} и антибот-слоя на нём нет. Прямой проверки я не выполнял.}
+\row{Статус данных}{Смешанные: описание функций и синтаксиса из документации клиентов, лимиты не подтверждены.}
+\end{syscard}
+
+\begin{lstlisting}[caption={Europe PMC: поиск с курсорной пагинацией}]
+import requests
+
+URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+params = {"query": 'TITLE:"long covid" AND OPEN_ACCESS:y',
+          "format": "json", "resultType": "core",
+          "pageSize": 100, "cursorMark": "*"}
+while True:
+    d = requests.get(URL, params=params, timeout=60).json()
+    for rec in d["resultList"]["result"]:
+        print(rec.get("pmid"), rec.get("doi"), rec["title"])
+    nxt = d.get("nextCursorMark")
+    if not nxt or nxt == params["cursorMark"]:
+        break
+    params["cursorMark"] = nxt
+\end{lstlisting}
+
+% ---------------------------------------------------------------------
+\subsection{arXiv}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{arXiv (Cornell University)}
+\row{Фокус}{Препринты по физике, математике, информатике, количественной биологии и финансам, статистике, электротехнике, экономике. Рецензирования нет; текст и метаданные доступны сразу.}
+\row{Программный доступ}{API на хосте \code{export.arxiv.org}: \url{https://export.arxiv.org/api/query}. Ответ в формате Atom XML (JSON нужно получать конвертацией на своей стороне). Для массового сбора предусмотрены OAI-PMH, дамп метаданных и массовый доступ к полным текстам (S3).}
+\row{Лимиты}{Условия использования устаревших API (OAI-PMH, RSS и API запросов) требуют не более одного запроса в три секунды и одного соединения; лимит общий для всех ваших машин, наращивание числа машин для обхода запрещено. Руководство пользователя называет потолок 30\,000 результатов на запрос при срезах не более 2000. Новые статьи появляются в API раз в сутки около полуночи, поэтому результаты стоит кэшировать. Метаданные распространяются как CC0, сами файлы статей имеют отдельные права.}
+\row{Синтаксис запросов}{Параметр \code{search_query} с префиксами полей: \code{ti:} название, \code{au:} автор, \code{abs:} аннотация, \code{cat:} категория, \code{all:} все поля, \code{submittedDate:[YYYYMMDDHHMM TO YYYYMMDDHHMM]}; операторы \code{AND}, \code{OR}, \code{ANDNOT}; пробелы кодируются как \code{+}, скобки как \texttt{\%28} и \texttt{\%29}, кавычки как \texttt{\%22}. Параметры \code{start}, \code{max_results}, \code{sortBy}, \code{sortOrder}. Пример: \code{au:del_maestro+ANDNOT+ti:checkerboard}.}
+\row{Подводные камни}{Ошибка может приходить как запись в Atom-ленте, а не как HTTP-код; успешный разбор XML ещё не значит, что в ленте статьи. Для регулярного мониторинга новых работ лучше использовать RSS по категориям или OAI-PMH, а не опрос поиска.}
+\row{Блокировка веб-агентов}{Да, и arXiv формулирует это жёстче всех: страница «Robots Beware» гласит, что неизбирательная автоматическая загрузка с сайта не допускается; сервер ограничен, приоритет отдан людям. Хост мониторится, нарушителям возвращается 403, а продолжение «беглого огня» после отказа трактуется как атака, на которую отвечают без предупреждения. Страница отказа прямо предлагает использовать \code{export.arxiv.org} для автоматического сбора. Если нужен повышенный лимит, нужно писать в поддержку \emph{заранее}.}
+\row{Статус данных}{Официальные (Robots Beware, Terms of Use, руководство API). Один сторонний блог упоминает ужесточение политики с 1~октября 2026\,г.; на официальных страницах я этого не подтвердил, поэтому проверьте анонсы arXiv.}
+\end{syscard}
+
+\begin{lstlisting}[caption={arXiv: запрос с паузой 3 секунды}]
+import requests, time
+import xml.etree.ElementTree as ET
+
+NS = {"a": "http://www.w3.org/2005/Atom",
+      "os": "http://a9.com/-/spec/opensearch/1.1/"}
+HEADERS = {"User-Agent": "litsearch/1.0 (mailto:you@example.org)"}
+
+def arxiv_search(query, start=0, n=50):
+    r = requests.get("https://export.arxiv.org/api/query", headers=HEADERS, params={
+        "search_query": query, "start": start, "max_results": n,
+        "sortBy": "submittedDate", "sortOrder": "descending"}, timeout=60)
+    r.raise_for_status()
+    root = ET.fromstring(r.text)
+    total = int(root.find("os:totalResults", NS).text)
+    items = [{"id": e.find("a:id", NS).text,
+              "title": " ".join(e.find("a:title", NS).text.split()),
+              "published": e.find("a:published", NS).text}
+             for e in root.findall("a:entry", NS)]
+    return total, items
+
+total, items = arxiv_search("cat:cs.CL AND abs:retrieval")
+time.sleep(3.1)     # arXiv terms: one request per 3 seconds, one connection
+\end{lstlisting}
+
+% ---------------------------------------------------------------------
+\subsection{OpenAlex}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{OpenAlex (OurResearch)}
+\row{Фокус}{Открытый каталог научных метаданных по всем областям: работы, авторы, источники, организации, темы, финансирование, гранты. Полностью открыт (лицензия CC0). Сегодня один из лучших универсальных источников для первичного поиска и библиометрии.}
+\row{Программный доступ}{REST API: \url{https://api.openalex.org/}. Условия изменились в 2026 году: с 13~февраля 2026\,г. для использования API нужен бесплатный ключ (создаётся в аккаунте на openalex.org, передаётся как \code{api_key=}), без ключа допустимы только демонстрационные вызовы. Полный снапшот для скачивания остаётся бесплатным.}
+\row{Лимиты}{Введена модель оплаты по использованию: у каждого ключа есть суточный бюджет в долларах. По документации, стоимость вызова зависит от типа: одиночная запись по ID или DOI бесплатна; список с фильтром порядка \$0.0001; поисковый запрос около \$0.001; семантический поиск и полный текст около \$0.01. Общий потолок --- до 100 запросов в секунду независимо от стоимости. Остаток бюджета можно узнать вызовом \code{/rate-limit}. Совет из документации: \code{per_page=100}, чтобы бюджет расходовался экономнее.}
+\row{Подводные камни}{Численные значения бесплатного бюджета в разных источниках и версиях документации расходятся (с ключом называют \$1 в день; для безключевого режима встречаются \$0.01, \$0.10 и абстрактные «кредиты»). Руководствуйтесь ответом \code{/rate-limit} для вашего ключа. Многие учебники до 2026 года пишут «ключ не нужен» --- это устарело.}
+\row{Синтаксис запросов}{Параметры \code{search} (полнотекстовый поиск по названию, аннотации и др.), \code{filter} (через запятую; например, \code{publication_year:2025,is_oa:true}), \code{select}, \code{group_by}, \code{sort}. Пакетный поиск по DOI: \code{filter=doi:10.1/a|10.1/b} (до 100 значений). Пагинация курсором: \code{cursor=*}, затем \code{meta.next_cursor}. Аннотации приходят в виде инвертированного индекса (\code{abstract_inverted_index}).}
+\row{Блокировка веб-агентов}{Для API --- нет: сервис рассчитан на автоматические клиенты, но теперь требует ключ и тарифицирует нагрузку. Для больших объёмов предусмотрен снапшот; парсить сайт openalex.org не нужно.}
+\row{Статус данных}{Официальные (документация developers.openalex.org, рассылка пользователей от 13.01.2026), но числа бюджета противоречивы.}
+\end{syscard}
+
+\begin{lstlisting}[caption={OpenAlex: фильтрованный поиск с курсором}]
+import os, requests
+
+KEY = os.environ["OPENALEX_API_KEY"]
+params = {"search": "retrieval augmented generation",
+          "filter": "publication_year:2025-2026,is_oa:true",
+          "select": "id,doi,title,publication_year,cited_by_count",
+          "per_page": 100, "cursor": "*", "api_key": KEY}
+n = 0
+while params["cursor"] and n < 500:
+    d = requests.get("https://api.openalex.org/works", params=params, timeout=60).json()
+    for w in d["results"]:
+        print(w["doi"], w["publication_year"], w["title"])
+        n += 1
+    params["cursor"] = d["meta"].get("next_cursor")
+\end{lstlisting}
+
+% ---------------------------------------------------------------------
+\subsection{Crossref}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Crossref REST API}
+\row{Фокус}{Метаданные всех публикаций с DOI, зарегистрированными через Crossref: примерно 180 млн записей. Лучший источник для поиска DOI по библиографической ссылке, для данных о лицензиях, финансировании, ссылках и датах. Аннотации есть далеко не у всех записей, полного текста нет.}
+\row{Программный доступ}{\url{https://api.crossref.org/}. Ключ не нужен. Контактный e-mail в параметре \code{mailto=} переводит запрос в «polite»-пул с более высокими лимитами и позволяет Crossref связаться с вами при проблемах. Для платного сервиса Metadata Plus и других интерфейсов (XML API, OAI-PMH) лимиты не менялись.}
+\row{Лимиты}{С 21~июля 2026\,г. лимиты зависят от типа запроса. Одиночная запись: 5 запросов/с (public) и 10/с (polite). Списки (запросы с фильтрами и поиском): 1 запрос/с (public) и 3 запроса/с (polite). Лимит теперь считается по адресу e-mail, чтобы нельзя было обойти его множеством IP. Значения приходят в заголовках \code{x-rate-limit-limit}, \code{x-rate-limit-interval} и \code{x-rate-limit-type}. Ранее (с 1~декабря 2025\,г.) вводились также ограничения по числу одновременных запросов.}
+\row{Синтаксис запросов}{\code{/works?query=...}, \code{query.bibliographic=...} (поиск по ссылке целиком), \code{query.author=...}, \code{query.title=...}; фильтры \code{filter=from-pub-date:2023-01-01,type:journal-article,has-abstract:true}; \code{rows} до 1000; \code{select=DOI,title}; глубокая пагинация через \code{cursor=*} и \code{next-cursor}.}
+\row{Блокировка веб-агентов}{API --- нет, нужно только соблюдать лимиты и указывать e-mail. Превышение приводит к 429 и автоматической блокировке. Ряд сторонних описаний ещё называет «около 50 запросов/с для polite pool»: это устарело и противоречит анонсу 2026 года.}
+\row{Статус данных}{Официальные (блог и форум Crossref: анонс от 5.11.2025 и обновление от 21.07.2026).}
+\end{syscard}
+
+\begin{lstlisting}[caption={Crossref: поиск по библиографической строке}]
+import requests
+
+r = requests.get("https://api.crossref.org/works", params={
+    "query.bibliographic": "Attention is all you need Vaswani 2017",
+    "rows": 3, "select": "DOI,title,issued,is-referenced-by-count",
+    "mailto": "you@example.org"}, timeout=60)
+r.raise_for_status()
+print(r.headers.get("x-rate-limit-limit"), r.headers.get("x-rate-limit-type"))
+for it in r.json()["message"]["items"]:
+    print(it["DOI"], it.get("title"))
+\end{lstlisting}
+
+% ---------------------------------------------------------------------
+\subsection{Semantic Scholar (Academic Graph API)}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Semantic Scholar (Allen Institute for AI)}
+\row{Фокус}{Все науки, но особенно силён в информатике и ИИ. Данные о цитированиях и контекстах цитирования, влиятельных цитированиях, краткие TLDR-аннотации, рекомендации похожих статей, ссылки на открытые PDF.}
+\row{Программный доступ}{Academic Graph API: \url{https://api.semanticscholar.org/graph/v1}. Ключ передаётся заголовком \code{x-api-key}. Есть Recommendations API и Datasets API (скачиваемые снапшоты). Эндпоинты: \code{/paper/search} (релевантность), \code{/paper/search/bulk} (массовая выгрузка), \code{/paper/batch} (пакетный запрос по ID, до нескольких сотен за вызов), \code{/paper/{id}}, \code{/author/...}.}
+\row{Лимиты}{Для ключа стартовый лимит --- 1 запрос/с на всех эндпоинтах. Без ключа действует общий пул для всех безключевых пользователей (в документации указан порядок 1000 запр./с суммарно на всех), и при нагрузке часто приходит 429. Для задач, где этого не хватает, сам сервис советует скачать датасеты и работать локально.}
+\row{Подводные камни}{Источники расходятся: в сторонних руководствах встречаются «100 запросов за 5 минут без ключа», «около 20 запросов в минуту», «100 запросов в секунду с ключом»; это либо устарело, либо относится к иным тарифам. Нужно закладывать повтор при 429 и учитывать, что поиск по релевантности ограничен по глубине --- для полной выгрузки используйте bulk-эндпоинт.}
+\row{Синтаксис запросов}{\code{query=} (ключевые слова); дополнительные параметры \code{year=2020-2025}, \code{fieldsOfStudy=}, \code{openAccessPdf}, \code{minCitationCount}, \code{venue}; обязательно выбирайте поля параметром \code{fields=title,year,externalIds,abstract,openAccessPdf}, иначе придут только ID и название.}
+\row{Блокировка веб-агентов}{Для API --- нет, только троттлинг (429). Рекомендуется всегда использовать ключ, при 429 повторять запрос с задержкой.}
+\row{Статус данных}{Часть официальных (страница продукта и руководство), цифры лимитов противоречивые.}
+\end{syscard}
+
+\begin{lstlisting}[caption={Semantic Scholar: поиск с ключом и повтором при 429}]
+import os, time, requests
+
+H = {"x-api-key": os.environ["S2_API_KEY"]}
+def s2_search(q, limit=100, offset=0):
+    for attempt in range(5):
+        r = requests.get("https://api.semanticscholar.org/graph/v1/paper/search",
+            headers=H, params={"query": q, "limit": limit, "offset": offset,
+            "fields": "title,year,externalIds,abstract,openAccessPdf,citationCount"},
+            timeout=60)
+        if r.status_code == 429:
+            time.sleep(2 ** attempt); continue
+        r.raise_for_status()
+        return r.json()
+    raise RuntimeError("rate limited")
+
+d = s2_search("dense passage retrieval")
+print(d["total"], [p["title"] for p in d["data"][:3]])
+time.sleep(1.1)       # 1 request/second with an introductory key
+\end{lstlisting}
+
+% ---------------------------------------------------------------------
+\subsection{CORE}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{CORE (The Open University, Великобритания)}
+\row{Фокус}{Крупнейший агрегатор открытого доступа: сотни миллионов исследований из тысяч репозиториев; полные тексты для десятков миллионов статей. Полезен, когда нужен именно доступный текст, а не только метаданные.}
+\row{Программный доступ}{API v3: \url{https://api.core.ac.uk/v3}. Регистрация бесплатная на core.ac.uk/services/api; ключ передаётся заголовком \code{Authorization: Bearer ...} или параметром \code{api_key}. Без ключа работают только базовые запросы метаданных, без полного текста. Эндпоинты поиска требуют завершающего слэша: \code{/v3/search/works/}.}
+\row{Лимиты}{Лимиты выражаются в «токенах» в день и в минуту. По стороннему описанию: без аутентификации 100 токенов в день и 10 в минуту, личный аккаунт 1000 в день и 25 в минуту, академический 5000 в день; простой запрос стоит 1 токен, скачивание и scroll-пагинация 3--5.}
+\row{Синтаксис запросов}{\code{q=} с поддержкой булевых операторов и полей (например, \code{doi:10.1038/nature12373}); параметры \code{limit}, \code{offset}, scroll для глубокой выгрузки. Метод POST принимает JSON с теми же полями.}
+\row{Блокировка веб-агентов}{Для API --- нет, используется квота по токенам. Парсить HTML портала не нужно: для массового сбора у CORE есть датасет.}
+\row{Статус данных}{Вторичные (описание в навыках для ИИ-агентов и обёртки Apify); числа лимитов следует проверить на странице CORE.}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{Unpaywall}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Unpaywall (OurResearch)}
+\row{Фокус}{Не поисковик по темам, а «разрешитель» открытого доступа: по DOI сообщает, есть ли легальная бесплатная версия, где она лежит (репозиторий, препринт, страница издателя) и какого типа OA (gold, green, hybrid, bronze). Незаменим на втором шаге после поиска метаданных.}
+\row{Программный доступ}{\code{GET https://api.unpaywall.org/v2/DOI?email=ВАШ_EMAIL}. Ключ не нужен, но e-mail обязателен. Дополнительно есть эндпоинт поиска по названию (\code{/v2/search}, 50 результатов на странице). Для крупных задач --- снапшот базы и Data Feed.}
+\row{Лимиты}{Рекомендация: не более 100\,000 запросов в сутки; жёсткого ограничения в секунду не заявлено, но разумно держать 1--10 запросов в секунду. Если нужно больше, сервис советует скачать снапшот.}
+\row{Блокировка веб-агентов}{Нет; сервис создан для программного вызова.}
+\row{Статус данных}{Официальные (unpaywall.org/api/v2).}
+\end{syscard}
+
+\begin{lstlisting}[caption={Unpaywall: найти бесплатную версию по DOI}]
+import requests
+
+def free_version(doi, email="you@example.org"):
+    r = requests.get(f"https://api.unpaywall.org/v2/{doi}", params={"email": email}, timeout=30)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    d = r.json()
+    best = d.get("best_oa_location") or {}
+    return {"is_oa": d["is_oa"], "status": d["oa_status"], "pdf": best.get("url_for_pdf")}
+
+print(free_version("10.1038/nature12373"))
+\end{lstlisting}
+
+% ---------------------------------------------------------------------
+\subsection{DOAJ}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{DOAJ (Directory of Open Access Journals)}
+\row{Фокус}{Курируемый каталог рецензируемых журналов открытого доступа (порядка 20\,000 журналов) и их статей (миллионы записей). Полезен для проверки «качества» издания и поиска статей только в OA-журналах. Препринты не индексируются.}
+\row{Программный доступ}{Публичный API (документация \url{https://doaj.org/api/v4/docs}); поиск без ключа. Эндпоинты вида \code{/api/search/articles/ЗАПРОС} и \code{/api/search/journals/ЗАПРОС}, журнал по ISSN: \code{/api/search/journals/issn:XXXX-XXXX}. Актуальный префикс пути версии сверяйте по документации.}
+\row{Лимиты}{Два запроса в секунду на все маршруты; допускаются «всплески», до пяти запросов пользователя ставятся в очередь и обслуживаются по очереди при среднем темпе 2 запроса/с.}
+\row{Синтаксис запросов}{База построена на Elasticsearch, поддерживается синтаксис query string (Lucene): \code{title:climate AND author:Smith}; часть возможностей отключена ради производительности. Параметры \code{page}, \code{pageSize}; небольшие размеры страницы (до десятков) работают надёжнее.}
+\row{Блокировка веб-агентов}{Нет, только троттлинг по лимиту.}
+\row{Статус данных}{Официальные (документация) и вторичные (обёртки).}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{dblp}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{dblp computer science bibliography}
+\row{Фокус}{Библиография по информатике: конференции, журналы, авторы, с очень чистыми данными об авторах и местах публикации. Полных текстов и аннотаций нет.}
+\row{Программный доступ}{API поиска публикаций: \url{https://dblp.org/search/publ/api?q=...&format=json&h=100&f=0} (параметры \code{h} --- число результатов, \code{f} --- смещение); аналогичные для авторов и мест публикации. Также доступны SPARQL-эндпоинт \code{sparql.dblp.org} и полный XML-дамп, синхронный с сайтом.}
+\row{Лимиты}{При превышении возвращается пустой документ со статусом 429 и заголовок \code{Retry-After}, указывающий, сколько секунд ждать. Числа не публикуются. Для большого числа запросов FAQ советует скачать дамп.}
+\row{Блокировка веб-агентов}{Противоречивая картина. FAQ dblp прямо разрешает краулинг и предлагает простой XML/JSON API; в \code{robots.txt} могут быть ограничения для некоторых разделов. Одновременно авторы клиентских инструментов в 2026 году сообщают, что \code{dblp.org} отдаёт API-клиентам страницу проверки на бота вместо JSON, что вынудило их перейти на SPARQL-эндпоинт; другие отмечают, что dblp «агрессивно» ограничивает частоту и сбрасывает соединения при быстрых последовательных запросах. Рекомендация: держать паузу 3 секунды, обрабатывать 429 и 503, для объёмов использовать дамп или SPARQL.}
+\row{Статус данных}{Противоречивые: официальный FAQ против сообщений третьих сторон.}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{NASA ADS / SciX}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{NASA Astrophysics Data System (ADS), ныне SciX}
+\row{Фокус}{Астрономия, астрофизика, планетология, гелиофизика, смежная физика и науки о Земле. Богатые данные о цитированиях и библиографические коды (bibcode).}
+\row{Программный доступ}{\url{https://api.adsabs.harvard.edu/v1/search/query}. Для доступа нужен аккаунт и токен («Generate a new key» в настройках), передаётся заголовком \code{Authorization: Bearer ТОКЕН}. Есть Python-пакет \code{ads}.}
+\row{Лимиты}{По умолчанию 5000 запросов в сутки на токен; лимиты заданы отдельно для каждого эндпоинта и сообщаются в заголовках \code{X-RateLimit-Limit}, \code{X-RateLimit-Remaining}, \code{X-RateLimit-Reset}; сброс в полночь UTC. Повышение лимита --- по письму в службу поддержки ADS.}
+\row{Синтаксис запросов}{Синтаксис Solr: \code{author:"Hubble, E"}, \code{title:exoplanet*}, \code{abstract:"dark energy"}, \code{year:[2020 TO 2024]}, \code{pubdate:[2023-01-00 TO *]}, \code{"transiting exoplanets" +JWST -Kepler}; параметры \code{fl} (какие поля вернуть), \code{rows}, \code{start}, \code{sort}.}
+\row{Блокировка веб-агентов}{Для API нет, но токен обязателен. Не стоит обращаться к интерфейсу сайта автоматически, когда есть API.}
+\row{Статус данных}{Официальные (репозиторий adsabs-dev-api) и вторичные (клиенты).}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{OpenAIRE}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{OpenAIRE Graph}
+\row{Фокус}{Европейский открытый граф научных продуктов: публикации, наборы данных, программное обеспечение, проекты, финансирование, организации. Особенно полезен для связки работ с грантами (EC, UKRI, NIH, Wellcome) и для поиска открытых научных результатов. Граф большой: порядка 350 млн исследовательских продуктов по данным changelog версии 11.}
+\row{Программный доступ}{Публичные API (подробно: \url{https://graph.openaire.eu/docs/}) и дампы графа. Для повышенных лимитов нужна авторизация через OpenAIRE AAI: персональный токен доступа (действует около часа, выдаётся по refresh-токену, который живёт месяц) или регистрация сервиса с client credentials.}
+\row{Лимиты}{Без аутентификации до 60 запросов в час, с аутентификацией до 7200 запросов в час (скользящее окно один час). Лимиты видны в заголовках \code{x-ratelimit-limit} и \code{x-ratelimit-used}. Ранее действовал переходный период со значением 7200 для всех, теперь для безключевых ограничение жёсткое.}
+\row{Лицензия и блокировка}{Данные под CC-BY (нужна ссылка на источник). Это машинный сервис, блокировки HTML не требуются; при превышении --- 429.}
+\row{Статус данных}{Официальные (раздел Terms of use документации).}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{Lens.org}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{The Lens}
+\row{Фокус}{Научные работы и патенты в одной базе со связями между ними (цитирование патентами, поиск предшествующего уровня техники). Полезен для инновационной аналитики и технологического скаутинга.}
+\row{Программный доступ}{\url{https://api.lens.org/}. Доступ предоставляется по заявке (Request access), затем в профиле создаётся токен; POST-запросы передают токен как \code{Authorization: Bearer ...}, GET --- параметром. Запросы формулируются как JSON в стиле Elasticsearch (\code{bool}, \code{must}, \code{match}, \code{range}).}
+\row{Лимиты}{Зависят от плана. Например, институциональный план одного университета: 5000 запросов в месяц, 500 записей в запросе для научных работ (100 для патентов), 10 запросов в минуту. Остаток сообщается в заголовках \code{x-rate-limit-*}. Для некоммерческих пользователей встречаются «бесплатные» планы, для коммерческих доступ платный, обычно с пробным периодом.}
+\row{Блокировка веб-агентов}{Доступ программный только по токену; автоматический обход веб-интерфейса лицензией Lens не предусмотрен.}
+\row{Статус данных}{Часть официальных (docs.api.lens.org), числа по планам вторичные и различаются.}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{BASE (Bielefeld Academic Search Engine)}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{BASE}
+\row{Фокус}{Огромный агрегатор документов открытых репозиториев и цифровых библиотек (порядка 400 млн документов из десятков тысяч источников), собранных по OAI-PMH. Хорош для поиска «серой» литературы и материалов университетских репозиториев.}
+\row{Программный доступ}{Есть HTTP-интерфейс (\code{BaseHttpSearchInterface.fcgi}, ответ JSON), но он \textbf{ограничен предварительно зарегистрированными IP-адресами и User-Agent}: нужно заранее запросить доступ у BASE и дать адреса. Веб-портал при этом открыт для людей.}
+\row{Лимиты}{Публично не заданы; определяются при согласовании доступа.}
+\row{Блокировка веб-агентов}{Да, по IP и User-Agent: запросы вне белого списка отклоняются. Это скорее политика допуска, чем борьба с ботами: выделенный API есть, но по заявке. Без заявки подойдут другие агрегаторы (CORE, OpenAIRE, OpenAlex).}
+\row{Статус данных}{Вторичные (описание клиента rbace и каталогов), но с совпадающими утверждениями из нескольких мест.}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{Scopus (Elsevier)}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Scopus Search API}
+\row{Фокус}{Коммерческий мультидисциплинарный индекс рефератов и цитирования, широко используемый в наукометрии. Хорош для метрик, профилей авторов, аффилиаций.}
+\row{Программный доступ}{\url{https://api.elsevier.com/content/search/scopus}. API-ключ создаётся бесплатно на dev.elsevier.com (заголовок \code{X-ELS-APIKey}), но объём данных зависит от подписки. Elsevier полагается в первую очередь на IP-адреса вуза, прокси не поддерживаются; для удалённой работы нужен «Institutional Token» (по запросу в поддержку).}
+\row{Лимиты}{Недельные квоты на ключ, сбрасываются через неделю после первого использования. Для Scopus Search --- 20\,000 запросов в неделю (около 9 запросов/с по стороннему описанию), Abstract Retrieval порядка 10\,000 (в других описаниях 5000), ScienceDirect Search v2 --- 20\,000 в неделю и 2 запроса/с. Один поиск возвращает не более первых 5000 записей. Остаток в заголовках \code{X-RateLimit-*}; при исчерпании --- 429 «QUOTA EXCEEDED».}
+\row{Синтаксис запросов}{Поля в стиле \code{TITLE-ABS-KEY("metabolic syndrome") AND PUBYEAR > 2020 AND AFFIL(Oxford)}; также \code{AUTH()}, \code{SRCTITLE()}, \code{DOI()}, \code{LANGUAGE()}. Страницы: \code{count} (до 25 для стандартного представления, до 200 для некоторых), \code{start}.}
+\row{Блокировка веб-агентов}{Для API нет блокировки, но жёсткая зависимость от ключа, квот и подписки. Скрейпинг сайта scopus.com лицензией, как правило, запрещён.}
+\row{Статус данных}{Официальные (dev.elsevier.com: api\_key\_settings) и вторичные (клиентские библиотеки).}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{Web of Science (Clarivate)}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Web of Science APIs}
+\row{Фокус}{Коммерческий индекс цитирования (Core Collection и др.) для наукометрии, оценки журналов и организаций.}
+\row{Программный доступ}{Через Clarivate Developer Portal: регистрируете приложение и подписываетесь на нужный API. Два основных продукта: \textbf{Starter API} (поиск и импорт публикаций; входит в подписку на Core Collection) и \textbf{Expanded API} (полные метаданные, адреса, цитирования, финансирование; требует отдельной платной лицензии). У организаций бывают уровни Basic, Intermediate, Premium.}
+\row{Лимиты}{Определяются тарифом подписки (число документов и запросов); публичных универсальных чисел нет.}
+\row{Синтаксис запросов}{Теги поля вида \code{TS=} (тема), \code{AU=} (автор), \code{PY=} (год), \code{SO=} (источник), \code{DO=} (DOI), с операторами \code{AND}, \code{OR}, \code{NOT}.}
+\row{Блокировка веб-агентов}{Доступ программный только по ключу и подписке; обход сайта без договора не предполагается.}
+\row{Статус данных}{Официальные (Developer Portal) и вторичные (документация партнёров).}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{IEEE Xplore}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{IEEE Xplore Gateway API}
+\row{Фокус}{Инженерия, электроника, телекоммуникации, информатика: журналы и труды конференций IEEE и IET, стандарты.}
+\row{Программный доступ}{\url{https://ieeexploreapi.ieee.org/api/v1/search/articles}. Бесплатный ключ выдаётся на developer.ieee.org, передаётся параметром \code{apikey}. Метаданные и ссылки доступны всем; полный текст --- для открытых статей или при наличии токена подписки.}
+\row{Лимиты}{По стороннему описанию бесплатный уровень допускает около 200 вызовов в день и до 200 записей на вызов (параметр \code{max_records}); при превышении --- 429. Точные условия уточняйте на портале.}
+\row{Синтаксис запросов}{Параметры \code{querytext}, \code{author}, \code{article_title}, \code{publication_year}, \code{start_record}, \code{max_records}, \code{sort_field}; булевы операторы в \code{querytext}.}
+\row{Блокировка веб-агентов}{API --- по ключу; HTML-страницы издателя с автоматическим доступом не рассчитаны, а лицензионные условия обычно запрещают массовую выгрузку.}
+\row{Статус данных}{Вторичные.}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{Springer Nature (Meta API и Open Access API)}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Springer Nature API}
+\row{Фокус}{Журналы, книги и главы издательства Springer Nature, включая Nature Portfolio и BMC. Meta API охватывает метаданные всего контента (подписного и открытого), Open Access API --- открытые статьи с полным текстом; для текстового и дата-майнинга предусмотрен отдельный Full Text / TDM API.}
+\row{Программный доступ}{Регистрация на dev.springernature.com, ключ нужного типа (Meta, Open Access, TDM). Адрес Meta API: \url{https://api.springernature.com/meta/v2/json}; параметры \code{q}, \code{p} (размер страницы), \code{s} (стартовая позиция), \code{api_key}.}
+\row{Лимиты}{По официальной странице: уровень Basic бесплатный, 500 обращений в сутки для Open Access API, троттлинг 100 обращений в минуту, один ключ на аккаунт; уровень Premium (университеты, организации) --- 10\,000 обращений в сутки, 300 в минуту, несколько ключей. Таблица «Managing Rate Limits» даёт сопоставимые числа для Meta API.}
+\row{Синтаксис запросов}{Например, \code{q=keyword:"cancer"}, поля \code{title:}, \code{doi:}, \code{journal:}, \code{subject:}, \code{year:}, булевы операторы; результаты --- JSON или XML.}
+\row{Блокировка веб-агентов}{API --- нет; для сайта link.springer.com автоматическая массовая загрузка запрещена условиями использования, на практике может блокироваться системами защиты. Используйте API.}
+\row{Статус данных}{Официальные (datasolutions.springernature.com, dev.springernature.com).}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{Google Scholar}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Google Scholar}
+\row{Фокус}{Самый широкий охват: статьи, препринты, диссертации, книги, патенты, судебные документы; удобные цитирования и метрики авторов и журналов. Но это поисковик для людей, а не источник данных.}
+\row{Программный доступ}{\textbf{Официального API нет.} Всё, что называют «Google Scholar API», --- это либо сторонние платные сервисы-скрейперы, либо библиотеки, которые разбирают HTML страницы результатов.}
+\row{Условия}{Общие условия Google запрещают доступ к сервисам автоматизированными средствами (роботы, пауки, скрейперы) без явного предварительного разрешения и отправку автоматизированных запросов; для Scholar такое разрешение на массовые запросы не выдавалось.}
+\row{Блокировка веб-агентов}{Да, самая известная и жёсткая: после серии запросов с одного адреса появляется страница «unusual traffic from your computer network», затем CAPTCHA, а при продолжении --- блокировка IP на десятки минут и дольше (подтверждено многолетними жалобами пользователей Zotero и других инструментов). Сторонние скрейпинг-сервисы строят бизнес именно на обходе этих защит, что само по себе нарушает условия.}
+\row{Рекомендация}{Не использовать для автоматического поиска. Замена по функциям: OpenAlex и Semantic Scholar (широкий охват, цитирования), Crossref (DOI), CORE и Unpaywall (доступ к тексту). Если Scholar нужен, пользуйтесь им вручную, а Zotero и подобным инструментам задавайте паузы и поддерживайте импорт по DOI, где Scholar не требуется.}
+\row{Статус данных}{Официальные условия и многократные независимые отчёты пользователей.}
+\end{syscard}
+
+% ---------------------------------------------------------------------
+\subsection{eLIBRARY.RU и КиберЛенинка}
+% ---------------------------------------------------------------------
+
+\begin{syscard}{Российские ресурсы}
+\row{eLIBRARY.RU}{Крупнейшая электронная библиотека научной периодики на русском языке; платформа РИНЦ (Russian Science Citation Index) и Science Index. Каждому документу присваивается код EDN, по которому можно ссылаться. В документах платформы упоминается API, открытый для организаций и частных лиц с регистрацией и получением кода доступа \code{apiKey}; из описания следует, что он ориентирован на связь ссылок и цитируемых документов по EDN. Открытого поискового API для сбора библиографии по темам я не нашёл.}
+\row{КиберЛенинка}{Бесплатная научная библиотека с полным текстом статей, каталог по классификации OECD; читать можно без регистрации. Документированного публичного API у меня подтвердить не удалось.}
+\row{Блокировка веб-агентов}{Данных о политике ботов найти не удалось; при отсутствии документированного API автоматизация HTML-страниц сопряжена с юридическим и техническим риском. Сначала проверьте условия использования и \code{robots.txt} (скрипт в разделе~\ref{sec:probe}), при необходимости напишите владельцам.}
+\row{Альтернативы}{Русскоязычные журналы с DOI находятся через Crossref и OpenAlex; репозитории --- через CORE, OpenAIRE и BASE.}
+\row{Статус данных}{Слабый: подтверждены только описания продуктов, но не программный доступ.}
+\end{syscard}
+
+% =====================================================================
+\section{Блокируют ли системы веб-агентов}
+% =====================================================================
+
+\subsection{Общая картина}
+
+Короткий ответ: \textbf{сервисы блокируют не «ботов вообще», а автоматические клиенты, которые обходят официальный интерфейс.} Почти везде картина двухслойная:
+
+\begin{enumerate}
+  \item \textbf{Официальный API} построен для машин. Его не блокируют, но он держится на лимитах, ключах, квотах и обязательной идентификации (e-mail, \code{tool}, User-Agent с контактом). Нарушение лимита заканчивается 429, а затем временной блокировкой ключа, e-mail или IP.
+  \item \textbf{HTML-интерфейс} рассчитан на людей. Здесь блокировки реальны и заметны: PubMed/PMC (IP-блокировка «possible misuse»), arXiv (403 и автоматическая реакция), Google Scholar (CAPTCHA и бан IP), издательские сайты за WAF-системами.
+  \item \textbf{Платные индексы} (Scopus, Web of Science, IEEE, Springer) вообще не предполагают доступа без ключа и договора; скрейпинг их страниц нарушает лицензию.
+\end{enumerate}
+
+\subsection{Сводка по системам}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.8cm}>{\raggedright\arraybackslash}p{4.3cm}>{\raggedright\arraybackslash}p{5.2cm}>{\raggedright\arraybackslash}p{3.0cm}}
+\toprule
+\textbf{Система} & \textbf{Машинный доступ} & \textbf{Что происходит при автоматизации HTML} & \textbf{Идентификация}\\
+\midrule
+\endhead
+PubMed & E-utilities & Блокировка IP «misuse/abuse» & \code{tool}, \code{email}\\
+PMC & OAI-PMH, FTP, Cloud & Массовая загрузка запрещена, IP-блок & \code{tool}, \code{email}\\
+Europe PMC & REST API & Не обнаружено (не проверял) & User-Agent\\
+arXiv & \code{export.arxiv.org}, OAI-PMH, S3 & 403 и жёсткая автоматическая реакция на нарушителей & User-Agent\\
+OpenAlex & API с ключом, снапшот & Не предполагается; ключ обязателен & \code{api_key}\\
+Crossref & REST API & Не предполагается; 429 и блок по e-mail & \code{mailto}\\
+Semantic Scholar & Graph API, датасеты & Не предполагается; 429 на общем пуле & \code{x-api-key}\\
+CORE & API v3, датасет & Не предполагается; квота токенов & Bearer-ключ\\
+Unpaywall & REST по DOI, снапшот & Не предполагается & \code{email}\\
+DOAJ & Публичный API & Не предполагается; 2 запр./с & User-Agent\\
+dblp & API, SPARQL, XML-дамп & Сообщают о bot-check на API-хосте & User-Agent\\
+ADS/SciX & API с токеном & Не предполагается & Bearer-токен\\
+OpenAIRE & API, дампы & Не предполагается; 60 запр./ч без токена & Bearer-токен\\
+Lens & API с токеном & Только по токену & Bearer-токен\\
+BASE & API по белому списку IP & Вне списка отклоняется & IP и User-Agent\\
+Scopus, WoS, IEEE, Springer & API по ключу и подписке & Лицензионный запрет; может блокироваться WAF & Ключ\\
+Google Scholar & Нет & CAPTCHA, бан IP, нарушение условий & ---\\
+eLIBRARY.RU, КиберЛенинка & Не подтверждён & Не изучено & ---\\
+\bottomrule
+\end{longtable}
+
+\subsection{Что стоит за блокировками на практике}
+
+\begin{itemize}
+  \item \textbf{Файл \code{robots.txt}} --- добровольный стандарт, но им пользуются как сигналом. Исследование 2025 года показало, что 71 из 200 самых посещаемых доменов полностью закрыли доступ ботам, а число запретов для конкретных агентов растёт; одновременно часть ботов, особенно ИИ-краулеры, вообще не проверяют \code{robots.txt}, поэтому сайты всё чаще полагаются на сетевую защиту.
+  \item \textbf{Сетевая защита уровня Cloudflare и аналогов.} С 2025 года Cloudflare блокирует ИИ-краулеры по умолчанию и поддерживает режим оплаты за обход (ответ HTTP 402); неавторизованные боты получают 403 или проверку. Сообщалось и о побочных эффектах: в августе 2026 года отмечали, что режим блокировки ИИ может давать 403 даже поисковым роботам. Многие издательские сайты работают за подобными фильтрами, поэтому ваш скрипт на облачном сервере с «датацентровым» IP рискует получить отказ.
+  \item \textbf{Наблюдаемые отказы.} Когда страницы NCBI/PMC и издательские сайты (например, Wiley) запрашивались автоматическим загрузчиком в поисковой выдаче при подготовке этого документа, многие возвращали «Access Denied». Это косвенное свидетельство, но оно согласуется с описанными политиками.
+  \item \textbf{Блокировка бывает ложной.} Часть блокировок срабатывает на общий прокси или NAT организации («иногда блокировку вызывает другой пользователь за тем же прокси», как пишет arXiv), поэтому при работе с университетской сети нужна особая аккуратность.
+\end{itemize}
+
+\subsection{Правила, которые снижают риск блокировки}
+
+\begin{enumerate}
+  \item Всегда используйте официальный API или дамп; HTML --- в последнюю очередь.
+  \item Представляйтесь: User-Agent вида \code{MyTool/1.0 (+https://site; mailto:me@org)}, плюс \code{mailto}, \code{email}, \code{tool}, ключ --- там, где они предусмотрены.
+  \item Держите частоту ниже заявленных лимитов, один поток на хост по умолчанию; для arXiv --- не чаще одного запроса в 3 секунды.
+  \item Обрабатывайте 429 и 503 с учётом заголовка \code{Retry-After} и экспоненциальной паузой; 403 не повторять --- это сигнал остановиться и разобраться.
+  \item Кэшируйте ответы на диск; повторный запрос того же самого не должен идти по сети.
+  \item Для объёмов от десятков тысяч записей берите снапшот (OpenAlex, Crossref, Unpaywall, Semantic Scholar, dblp, arXiv).
+  \item При необходимости более высокого лимита пишите владельцам сервиса \emph{заранее}: NCBI, arXiv, ADS и другие прямо предлагают такой путь.
+  \item Не обходите защиту: не решайте CAPTCHA автоматически, не меняйте IP и подпись клиента, чтобы скрыть автоматизацию.
+\end{enumerate}
+
+% =====================================================================
+\section{Как выбрать систему под задачу}
+% =====================================================================
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{5.2cm}>{\raggedright\arraybackslash}p{5.2cm}}
+\toprule
+\textbf{Задача} & \textbf{Основной источник} & \textbf{Дополнение}\\
+\midrule
+\endhead
+Медицина и биология, систематический обзор & PubMed (E-utilities) + Europe PMC & Unpaywall, PMC OA (через разрешённые сервисы)\\
+Универсальный поиск, библиометрия & OpenAlex & Crossref, Semantic Scholar\\
+Информатика и ИИ & Semantic Scholar, dblp & arXiv, OpenAlex\\
+Физика, математика, свежие препринты & arXiv & ADS (астрофизика), Semantic Scholar\\
+Найти DOI по ссылке & Crossref (\code{query.bibliographic}) & OpenAlex\\
+Получить бесплатный полный текст & Unpaywall, CORE & Europe PMC, arXiv\\
+Цитирования и метрики с подпиской & Scopus, Web of Science & OpenAlex как бесплатная замена\\
+Патенты и связь «наука $\leftrightarrow$ патенты» & Lens.org & ---\\
+Гранты и финансирование (ЕС) & OpenAIRE & OpenAlex, Crossref\\
+Серая литература и репозитории & CORE, OpenAIRE & BASE (по заявке)\\
+Журналы открытого доступа и их качество & DOAJ & ---\\
+Русскоязычные публикации & Crossref, OpenAlex, CORE & eLIBRARY.RU и КиберЛенинка (проверить условия)\\
+\bottomrule
+\end{longtable}
+
+\subsection{Рекомендуемая двухэтапная схема}
+
+\begin{enumerate}
+  \item \textbf{Поиск кандидатов} (метаданные): запросы в 2--3 системы, подходящие предметной области (например, PubMed + OpenAlex + Semantic Scholar).
+  \item \textbf{Нормализация и дедупликация}: приведите DOI к нижнему регистру, убирайте префикс \code{https://doi.org/}; без DOI сопоставляйте по нормализованному названию, году и первому автору. Храните PMID, arXiv-ID, OpenAlex ID как дополнительные ключи.
+  \item \textbf{Обогащение}: Crossref (лицензия, финансирование), Semantic Scholar или OpenAlex (цитирования), Unpaywall (OA-ссылка).
+  \item \textbf{Получение полного текста} только из разрешённых мест: Europe PMC, PMC (OAI-PMH/FTP/Cloud), arXiv через \code{export.arxiv.org}, ссылки Unpaywall и CORE.
+  \item \textbf{Воспроизводимость}: сохраняйте точную строку запроса, дату, версию API, число найденных записей, а для PubMed --- \code{querytranslation}.
+\end{enumerate}
+
+% =====================================================================
+\section{Универсальный клиент на Python}
+% =====================================================================
+
+Клиент ниже централизует три вещи, без которых автоматический поиск быстро упирается в блокировки: паузы по хостам, повтор при 429/503 с уважением к \code{Retry-After} и остановку при 403.
+
+\begin{lstlisting}[caption={Вежливый HTTP-клиент с паузами по хостам, повторами и кэшем}]
+import hashlib, json, pathlib, threading, time
+from collections import defaultdict
+from urllib.parse import urlparse
+import requests
+
+USER_AGENT = "LitSearch/1.0 (+https://example.org/litsearch; mailto:you@example.org)"
+
+# Minimum interval between requests, per host (seconds)
+MIN_INTERVAL = {
+    "eutils.ncbi.nlm.nih.gov": 0.34,      # 3 rps without a key (0.11 with a key)
+    "export.arxiv.org": 3.1,              # arXiv: 1 request / 3 s, single connection
+    "api.crossref.org": 0.4,              # polite pool, list requests: 3 rps
+    "api.openalex.org": 0.2,
+    "api.semanticscholar.org": 1.1,       # 1 rps with an introductory key
+    "www.ebi.ac.uk": 0.35,
+    "doaj.org": 0.55,                     # 2 rps
+    "api.unpaywall.org": 0.1,
+}
+CACHE = pathlib.Path(".http_cache"); CACHE.mkdir(exist_ok=True)
+_last = defaultdict(float); _lock = threading.Lock()
+_session = requests.Session(); _session.headers["User-Agent"] = USER_AGENT
+
+class Blocked(RuntimeError):
+    """403/401 from the server: stop and investigate, do not retry blindly."""
+
+def polite_get(url, params=None, headers=None, retries=5, timeout=60, use_cache=True):
+    key = hashlib.sha256(json.dumps([url, params], sort_keys=True, default=str).encode()).hexdigest()
+    f = CACHE / key
+    if use_cache and f.exists():
+        return f.read_text(encoding="utf-8")
+    host = urlparse(url).netloc
+    for attempt in range(retries):
+        with _lock:
+            wait = MIN_INTERVAL.get(host, 1.0) - (time.monotonic() - _last[host])
+            if wait > 0:
+                time.sleep(wait)
+            _last[host] = time.monotonic()
+        r = _session.get(url, params=params, headers=headers, timeout=timeout)
+        if r.status_code in (429, 503):
+            try:
+                delay = float(r.headers.get("Retry-After", ""))
+            except ValueError:
+                delay = 2 ** attempt * 2
+            time.sleep(delay)
+            continue
+        if r.status_code in (401, 403):
+            raise Blocked(f"{r.status_code} from {host}: check key, terms and robots.txt")
+        r.raise_for_status()
+        if use_cache:
+            f.write_text(r.text, encoding="utf-8")
+        return r.text
+    raise RuntimeError(f"gave up on {url}")
+
+def norm_doi(d):
+    if not d:
+        return None
+    d = d.strip().lower()
+    for p in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if d.startswith(p):
+            d = d[len(p):]
+    return d
+\end{lstlisting}
+
+% =====================================================================
+\section{Проверка доступности и \texttt{robots.txt} из вашей сети}\label{sec:probe}
+% =====================================================================
+
+Так как политики и лимиты меняются, а ответы зависят от вашего IP (университет, облако, домашний провайдер), разумно один раз проверить их у себя. Скрипт ниже: читает \code{robots.txt} выбранных хостов, проверяет, разрешает ли он вашему User-Agent типичный путь, делает по одному лёгкому запросу к API и сообщает код ответа, заголовки лимитов и признаки CAPTCHA или проверки на бота. Он делает минимум запросов и не пытается ничего обойти.
+
+\begin{lstlisting}[caption={probe\_access.py: проверка robots.txt и один безопасный запрос к каждому API}]
+import re, time, urllib.robotparser as rp
+import requests
+
+UA = "LitSearchProbe/1.0 (mailto:you@example.org)"
+TARGETS = [  # (name, robots host, sample path to test in robots, API test URL)
+    ("PubMed/E-utilities", "https://eutils.ncbi.nlm.nih.gov", "/entrez/eutils/esearch.fcgi",
+     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=asthma&retmax=1&retmode=json"),
+    ("PubMed website", "https://pubmed.ncbi.nlm.nih.gov", "/?term=asthma", None),
+    ("arXiv API", "https://export.arxiv.org", "/api/query",
+     "https://export.arxiv.org/api/query?search_query=all:test&max_results=1"),
+    ("arXiv website", "https://arxiv.org", "/list/cs.CL/recent", None),
+    ("Europe PMC", "https://www.ebi.ac.uk", "/europepmc/webservices/rest/search",
+     "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=asthma&format=json&pageSize=1"),
+    ("Crossref", "https://api.crossref.org", "/works",
+     "https://api.crossref.org/works?rows=1&mailto=you@example.org"),
+    ("Semantic Scholar", "https://api.semanticscholar.org", "/graph/v1/paper/search",
+     "https://api.semanticscholar.org/graph/v1/paper/search?query=test&limit=1"),
+    ("DOAJ", "https://doaj.org", "/api/search/articles/test",
+     "https://doaj.org/api/search/articles/test?pageSize=1"),
+    ("dblp", "https://dblp.org", "/search/publ/api",
+     "https://dblp.org/search/publ/api?q=test&format=json&h=1"),
+    ("Google Scholar (robots only)", "https://scholar.google.com", "/scholar?q=test", None),
+]
+BOT_MARKERS = re.compile(r"captcha|unusual traffic|access denied|verify you are human|robot", re.I)
+
+for name, host, path, api in TARGETS:
+    line = {"name": name}
+    try:
+        p = rp.RobotFileParser(host + "/robots.txt")
+        p.read()
+        line["robots_allows"] = p.can_fetch(UA, host + path)
+        line["crawl_delay"] = p.crawl_delay(UA)
+    except Exception as e:
+        line["robots_error"] = str(e)[:80]
+    if api:
+        try:
+            r = requests.get(api, headers={"User-Agent": UA}, timeout=30)
+            line["status"] = r.status_code
+            line["rate_headers"] = {k: v for k, v in r.headers.items()
+                                    if k.lower().startswith(("x-rate", "ratelimit", "retry-after"))}
+            line["bot_page"] = bool(BOT_MARKERS.search(r.text[:3000])) and r.status_code != 200
+        except Exception as e:
+            line["request_error"] = str(e)[:80]
+    print(line)
+    time.sleep(3.2)     # be polite, also to arXiv
+\end{lstlisting}
+
+Как читать результат: \code{status 200} и \code{robots_allows True} означают, что для этого пути проблем нет; 403 или \code{bot_page True} --- вас приняли за бота (смените канал: API, снапшот или другая сеть, но не обход защиты); 429 --- снизьте частоту; 401 --- нужен ключ.
+
+% =====================================================================
+\section{Чек-лист перед запуском массового поиска}
+% =====================================================================
+
+\begin{itemize}
+  \item Выбран официальный канал (API, OAI-PMH или снапшот) для каждой системы.
+  \item Получены ключи: NCBI (по желанию), OpenAlex (обязательно), Semantic Scholar, CORE, ADS, Scopus и др., где нужны.
+  \item В запросах есть идентификация: \code{mailto}, \code{email}, \code{tool}, содержательный User-Agent.
+  \item Паузы настроены по самому строгому лимиту хоста (arXiv: 3 с).
+  \item Обработаны 429, 503 и \code{Retry-After}; 403 не повторяется.
+  \item Включён дисковый кэш; результаты сохраняются сырыми и пересчитываются локально.
+  \item Для объёмов от десятков тысяч записей используются снапшоты.
+  \item Записаны строка запроса, дата и версия API; для PubMed --- \code{querytranslation}.
+  \item Проверено, что полные тексты берутся только из разрешённых источников и с учётом лицензии.
+  \item Пройдена проверка \code{probe_access.py} из той сети, где будет работать конвейер.
+\end{itemize}
+
+% =====================================================================
+\section{Источники}
+% =====================================================================
+
+Ниже перечислены страницы, на которых основаны сведения документа (проверены поиском 10~ноября 2026\,г.). Рекомендуется сверять числа с ними перед запуском.
+
+\subsection*{Официальные страницы и документация}
+\begin{itemize}[leftmargin=1.2em]
+  \item NCBI, Entrez Programming Utilities Help: \url{https://www.ncbi.nlm.nih.gov/books/NBK25497/}, \url{https://www.ncbi.nlm.nih.gov/books/NBK25499/}
+  \item NLM Support, API keys и rate limits: \url{https://support.nlm.nih.gov/knowledgebase/article/KA-05318/en-us}
+  \item PMC, правила автоматической загрузки: \url{https://www.ncbi.nlm.nih.gov/pmc/about/copyright/}, \url{https://www.ncbi.nlm.nih.gov/pmc/tools/textmining/}
+  \item arXiv, Robots Beware: \url{https://info.arxiv.org/help/robots.html}
+  \item arXiv, API user manual и bulk data: \url{https://info.arxiv.org/help/api/user-manual.html}, \url{https://info.arxiv.org/help/bulk_data.html}
+  \item OpenAlex, документация: \url{https://developers.openalex.org/api-reference/authentication}, \url{https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication}
+  \item Crossref, анонсы лимитов: \url{https://crossref.org/blog/announcing-changes-to-rest-api-rate-limits/}, \url{https://community.crossref.org/t/refining-rest-api-limits-for-improved-stability-and-reliability/16137}
+  \item Semantic Scholar API: \url{https://semanticscholar.org/product/api}, \url{https://webflow.semanticscholar.org/product/api/tutorial}
+  \item Unpaywall API: \url{https://unpaywall.org/api/v2}
+  \item DOAJ API: \url{https://doaj.org/api/v4/docs}
+  \item dblp FAQ о краулинге и лимитах: \url{https://dblp1.uni-trier.de/faq/1474706.html}
+  \item NASA ADS, документация API: \url{https://github.com/adsabs/adsabs-dev-api}
+  \item OpenAIRE Graph, условия и лимиты: \url{https://graph.openaire.eu/docs/next/apis/terms}
+  \item Lens API: \url{https://docs.api.lens.org/getting-started.html}
+  \item Elsevier Developer Portal, квоты: \url{https://dev.elsevier.com/api_key_settings.html}
+  \item Clarivate Developer Portal: \url{https://developer.clarivate.com/apis/wos}
+  \item Springer Nature API: \url{https://datasolutions.springernature.com/products/open-access}, \url{https://dev.springernature.com/docs/rate-limit-details/rate-limits}
+\end{itemize}
+
+\subsection*{Вторичные источники (описания клиентов, обзоры, форумы)}
+\begin{itemize}[leftmargin=1.2em]
+  \item Документация клиентов \code{europepmc} (rOpenSci) и \code{rbace} (BASE).
+  \item Описания Apify-актёров для Europe PMC, CORE и DOAJ, содержащие сведения об API и \code{robots.txt}.
+  \item Обсуждения блокировок Google Scholar на форумах Zotero и обзор «unusual traffic» от Google.
+  \item Руководства пользователей \code{pybliometrics} и \code{scopusflow} (квоты Scopus).
+  \item Релизные заметки \code{doi-mcp} и \code{fastpaper-cli} (поведение dblp и Semantic Scholar).
+  \item Публикации о блокировке ИИ-краулеров Cloudflare и исследования \code{robots.txt} на arXiv (2503.06035, 2505.21733).
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,1 @@
+{"version":"6.9","hitCount":0,"request":{"queryString":"(TITLE:свежие OR ABSTRACT:свежие) AND (TITLE:CRISPR OR ABSTRACT:CRISPR) AND (TITLE:серповидноклеточной OR ABSTRACT:серповидноклеточной) AND (TITLE:анемии OR ABSTRACT:анемии) AND OPEN_ACCESS:y","resultType":"core","cursorMark":"*","pageSize":50,"sort":"","synonym":false},"resultList":{"result":[]}}

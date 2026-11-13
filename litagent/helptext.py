@@ -1,0 +1,93 @@
+"""Встроенная справка: `python -m litagent help [тема]`. Тексты — здесь, чтобы не расходиться с кодом (см. тест)."""
+from __future__ import annotations
+
+import difflib
+
+TOPICS: dict[str, tuple[str, str]] = {
+    "start": ("с чего начать", """\
+1. Задайте e-mail (нужен для вежливых запросов): LITAGENT_EMAIL или `email` в litagent.toml (образец: litagent.example.toml).
+2. Проверьте доступность источников и модели:   python -m litagent check
+3. Ручной поиск:  python -m litagent manual -q "crispr; sickle cell" --oa-only
+4. Авто-поиск:    python -m litagent auto "цель на человеческом языке" --notes literature_search_systems.tex
+Подробно: help manual | auto | sites | import | pmc | pdf | speed | clean | llm | files | limits"""),
+    "manual": ("ручной режим", """\
+python -m litagent manual -q "тема" [-q "ещё тема"] [--topics файл.txt]
+Мини-язык темы: `;` — И между группами, `|` — ИЛИ внутри группы, `-слово` — исключение.
+  --sources a,b      какие источники (встроенные и свои)     --limit N          записей с источника
+  --site имя         искать ТОЛЬКО на одном сайте            --pick-site        выбрать один сайт из списка по номеру
+  --no-pmc           PubMed без поиска в PMC и без скачивания оттуда
+  --pdf-only         только статьи с реально доступным полным PDF (см. help pdf)
+  --workers N        параллельных скачиваний (по умолчанию 4; 1 — по одному; см. help speed)
+  --year-from/--year-to   диапазон лет                        --oa-only          только открытый доступ
+  --title-only       искать по названию                       --strict           каждая группа обязана встретиться
+  --max-downloads N  потолок скачиваний                       --dry-run          показать запросы, ничего не отправляя"""),
+    "auto": ("авто-режим (локальная нейросеть)", """\
+python -m litagent auto "цель" [--notes файл.tex|.md|.txt] [--llm-filter] [--rounds N] [--dry-run]
+--site имя / --pick-site: поиск только на одном сайте; нейросеть тогда видит в контексте только его и пишет запрос в его синтаксисе.
+Модель строит план запросов; код проверяет его (запрещённые источники отбрасываются). Свои сайты из custom_sites.json
+попадают в контекст модели автоматически. --dry-run показывает план и запросы без поиска.
+Нет модели/ответ мусорный — агент переходит на эвристику. Что видит модель из заметок: python -m litagent notes файл.tex"""),
+    "sites": ("свои сайты и опросник", """\
+python -m litagent sites add | edit [имя] | list | show [имя] | test [имя] | remove [имя]
+  add/edit   опросник «вопрос-ответ»: адрес API, параметр запроса, синтаксис, фильтры, страницы, ключ, пути в JSON
+             Enter — принять значение в [скобках], «-» — очистить поле, «/q» — отмена.
+  test       реальный запрос «machine learning» и проверка разбора полей (--query "..." — своя тема)
+Файл: custom_sites.json (--sites-file или `custom_sites` в litagent.toml). Подходят только JSON-API по GET.
+Дальше: help import"""),
+    "import": ("загрузка списка сайтов из интернета", """\
+python -m litagent sites import <https://…/sites.json | путь/к/файлу.json> [--only имена] [--overwrite] [--enable] [-y]
+Выбор: после списка спросит «Что добавить?» — Enter = все, либо номера/имена (1,3 · 2-4 · name1,name2), «нет» = отмена.
+  --only a,b  заранее выбрать конкретные;  -y без --only = добавить все без вопросов.
+Экономно: ОДИН запрос, не больше 256 КБ, без повторов, паузы по хосту; до 50 сайтов за раз.
+Безопасно (файл из сети недоверенный):
+  * сначала показывается нумерованный список (имя, хост, статус), запись — только после вашего выбора (или -y);
+  * ключи из файла вырезаются — при необходимости настройте их сами: sites edit имя;
+  * тексты чистятся и режутся (они попадают в промпт модели); сайты приходят ВЫКЛЮЧЕННЫМИ (включить: --enable
+    или sites edit); пауза между запросами — не меньше 1 с;
+  * адрес файла и адреса сайтов проверяются политикой (https, блок-лист); существующие имена не перезаписываются без --overwrite.
+Формат файла — как custom_sites.json: {"sites": [ {...}, ... ]} (образец: custom_sites.example.json). Для GitHub нужна ссылка Raw."""),
+    "pmc": ("PubMed + PMC: поиск и PDF", """\
+PubMed ищет сразу в двух базах одним запросом: PubMed (аннотации) и PMC (полнотекстовый архив, E-utilities db=pmc); записи
+объединяются по PMID/DOI. PDF скачиваются только официальным путём: OA Web Service (oa.fcgi) -> ссылка на PDF или пакет
+статьи на ftp.ncbi.nlm.nih.gov (по https); из пакета берётся основной PDF. Только для статей из Open Access Subset.
+Сайт PMC (pmc.ncbi.nlm.nih.gov, /pmc/articles/…/pdf) агенту по-прежнему закрыт: массовая загрузка оттуда запрещена.
+Отключить: --no-pmc или pubmed_pmc = false в litagent.toml. Лицензия: отдельные PDF из oa_pdf — для некоммерческого использования."""),
+    "pdf": ("только статьи с полным PDF", """\
+python -m litagent manual -q "тема" --pdf-only [--max-downloads N]      (то же в auto; в litagent.toml: pdf_only = true)
+Режим включает --oa-only (источники сразу сужают поиск) и считает статью найденной, только если PDF РЕАЛЬНО скачан и проверен
+(не лендинг и не paywall). XML-копии (Europe PMC) не берутся. Сначала проверяются записи, где PDF вероятен (ссылка из источника,
+PMCID, is_oa); попыток до 10×max_downloads. В results.csv — только статьи с PDF; отброшенные перечислены в run.json (pdf_only).
+Проверка = скачивание, поэтому с --no-download режим несовместим."""),
+    "speed": ("ускорение скачивания", """\
+--workers N (litagent.toml: download_workers) — параллельные скачивания, по умолчанию 4. К одному хосту: не чаще min_interval и
+одно соединение за раз; к разным хостам — одновременно. Для файлов: download_retries = 2, download_timeout = 25 с, Retry-After
+дольше 20 с -> кандидат пропускается; хост с 3 сбоями подряд пропускается до конца запуска; заглушка без %PDF обрывается сразу.
+Если файлы в основном на одном хосте, ускорения не будет (это правило вежливости). В конце печатается время скачивания."""),
+    "clean": ("очистка папки со статьями", """\
+python -m litagent clean [--dry-run] [-y] [--runs] [--cache] [--all] [--out папка]
+Удаляет скачанные .pdf/.xml (и .part) из pdf/ и xml/, чужие файлы не трогает; индекс приводится в порядок.
+--runs — ещё отчёты запусков, --cache — HTTP-кэш, --all — всё сразу. Без -y спрашивает подтверждение."""),
+    "llm": ("локальная модель", """\
+По умолчанию: Ollama, модель gemma4, адрес http://127.0.0.1:11434   (ollama pull gemma4)
+  --model имя  --llm-url адрес  --llm-provider ollama|openai (LM Studio, llama.cpp: http://localhost:1234/v1)
+Те же настройки — в разделе [llm] файла litagent.toml. Проверка связи: python -m litagent check"""),
+    "files": ("какие файлы создаются", """\
+library/pdf, library/xml   скачанные статьи          library/index.json   что уже скачано (повторно не качается)
+library/runs/<время>/      run.json (запросы, ошибки) и results.csv (статусы)       library/.http_cache  кэш ответов
+custom_sites.json          свои сайты (создаётся при sites add / sites import)       litagent.toml        ваши настройки"""),
+    "limits": ("что агент соблюдает всегда", """\
+Только легальные источники и открытые копии (Unpaywall/OA). Sci-Hub, Google Scholar и т.п. заблокированы политикой
+(policies.json). Паузы по хосту, Retry-After, 401/403 = остановка источника. Свои сайты подчиняются тем же правилам."""),
+}
+
+
+def render(topic: str | None = None) -> str:
+    if not topic:
+        w = max(map(len, TOPICS))
+        rows = "\n".join(f"  {k:<{w}}  {v[0]}" for k, v in TOPICS.items())
+        return f"Справка: python -m litagent help <тема>\n\n{rows}\n\nКоманды: manual, auto, check, notes, sites, clean, help (у каждой есть -h)."
+    t = topic.strip().lower()
+    if t in TOPICS:
+        return f"== {t}: {TOPICS[t][0]} ==\n{TOPICS[t][1]}"
+    near = difflib.get_close_matches(t, TOPICS, n=2)
+    return f"Нет темы «{topic}»." + (f" Возможно: {', '.join(near)}." if near else "") + "\n\n" + render()
