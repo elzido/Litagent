@@ -277,6 +277,27 @@ class TestAuto(Base):
         kept = planner.llm_filter(f, "goal", recs, 6, log=self.logs.append)
         self.assertEqual([r.doi for r in kept], ["10.1/a"])
 
+    def test_plan_normalization(self):
+        av = ["pubmed", "semanticscholar", "europepmc", "openalex"]
+        p = planner.plan_to_spec({"plan": {"Groups": "CRISPR; sickle cell", "sources": ["PubMed", "Semantic Scholar", "Europe PMC", "x"],
+                                           "raw": {"PubMed": "q[ti]"}}}, av, {})
+        self.assertEqual(p.spec.groups, [["CRISPR"], ["sickle cell"]])
+        self.assertEqual(p.sources, ["pubmed", "semanticscholar", "europepmc"])
+        self.assertEqual(p.spec.raw, {"pubmed": "q[ti]"})
+
+    def test_cyrillic_terms_trigger_retry(self):
+        llm = FakeLLM([{"groups": [["свежие"]]}, {"groups": [["sickle cell disease"]], "sources": ["pubmed"]}])
+        pl = planner.request_plan(llm, self.agent.policy, Notes(), "свежие работы по серповидноклеточной анемии", ["pubmed"], {})
+        self.assertEqual(pl.spec.groups, [["sickle cell disease"]])
+        self.assertEqual(len(llm.prompts), 2)
+
+    def test_prompt_is_compact_with_notes(self):
+        if not TEX.exists():
+            self.skipTest("нет .tex")
+        av = ["openalex", "pubmed", "europepmc", "arxiv", "semanticscholar", "crossref", "core", "doaj"]
+        s = planner.build_system(self.agent.policy, Notes.load(TEX), av)
+        self.assertLess(len(s), 10000)
+
     def test_llm_failure_falls_back(self):
         llm = FakeLLM([LLMError("down")])
         recs, specs, _ = planner.auto_search(self.agent, llm, Notes(), "CRISPR; sickle cell; последние 5 лет", ["pubmed"],
@@ -693,6 +714,37 @@ class TestLLMDefaults(unittest.TestCase):
         with mock.patch.object(LLM, "_post", post):
             LLM().chat("s", "u")
         self.assertEqual((sent["path"], sent["payload"]["model"]), ("/api/chat", "gemma4"))
+
+    def test_ollama_sends_num_ctx_and_think_false(self):
+        sent = {}
+
+        def post(self_, path, payload):
+            sent.update(payload)
+            return {"message": {"content": "{}"}}
+        with mock.patch.object(LLM, "_post", post):
+            LLM().chat("s", "u")
+            self.assertEqual(sent["options"]["num_ctx"], 8192)
+            self.assertIs(sent["think"], False)
+            LLM().chat("я" * 30000, "u")                       # длинный промпт -> контекст увеличивается
+            self.assertGreater(sent["options"]["num_ctx"], 8192)
+
+    def test_empty_reply_is_error_and_think_retry(self):
+        calls = []
+
+        def post(self_, path, payload):
+            calls.append(dict(payload))
+            if "think" in payload:
+                raise LLMError("LLM HTTP 400: model does not support think")
+            return {"message": {"content": '{"groups": [["a"]]}'}}
+        with mock.patch.object(LLM, "_post", post):
+            self.assertEqual(LLM().chat_json("s", "u"), {"groups": [["a"]]})
+        self.assertNotIn("think", calls[-1])
+        with mock.patch.object(LLM, "_post", lambda *a: {"message": {"content": "", "thinking": "..."}}):
+            with self.assertRaises(LLMError):
+                LLM().chat_json("s", "u", retries=1)
+
+    def test_extract_json_strips_think_block(self):
+        self.assertEqual(extract_json('<think>{"x": 1}</think>{"groups": [["a"]]}'), {"groups": [["a"]]})
 
     def test_example_config_matches(self):
         txt = Path(__file__).resolve().parents[1].joinpath("litagent.example.toml").read_text(encoding="utf-8")
@@ -1353,6 +1405,90 @@ class TestFastDownload(unittest.TestCase):
         self.assertEqual(cli.apply_overrides(dict(cli.DEFAULT_CFG), parse(["manual", "-q", "x"]))["download_workers"], 4)
         self.assertEqual(self.agent(download_workers=1).workers, 1)
         self.assertEqual(self.agent(download_workers=0).workers, 1)                      # минимум один поток
+
+
+# ====================================================================== --count (докачка до N PDF)
+class TestDownloadUntil(CustomBase):
+    router = staticmethod(pdfonly_router)
+
+    @staticmethod
+    def rec(doi, ok=True):
+        return Record(title=f"{'good' if ok else 'bad'} paper {doi}", doi=f"10.1/{doi}", is_oa=True)
+
+    def fake(self, a):
+        def fake_download(recs, n, oa_only=False, pdf_only=False):
+            c = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0}
+            for r in recs:
+                if c["pdf"] >= n:
+                    break
+                r.status = "pdf" if r.title.startswith("good") else "no_pdf"
+                c["pdf" if r.status == "pdf" else "no_pdf"] += 1
+            return c
+        a.download = fake_download
+
+    def test_deepens_until_target_and_skips_seen(self):
+        a = self.agent()
+        self.fake(a)
+        calls = []
+
+        def more(rnd):
+            calls.append(rnd)
+            return [self.rec("a"), self.rec("c"), self.rec("d"), self.rec("e", ok=False)]    # "a" уже проверена
+        counts, offered = a.download_until([self.rec("a"), self.rec("b", ok=False), self.rec("b2", ok=False)], 3, True, True, more, 5)
+        self.assertEqual((counts["pdf"], calls), (3, [1]))
+        self.assertEqual(len(offered), 6)                                                      # 3 старых + 3 новых (дубль отброшен)
+
+    def test_stops_when_nothing_new(self):
+        a = self.agent()
+        self.fake(a)
+        calls = []
+        counts, _ = a.download_until([self.rec("a")], 5, True, True, lambda r: calls.append(r) or [], 5)
+        self.assertEqual((counts["pdf"], calls), (1, [1]))
+
+    def test_respects_max_rounds(self):
+        a = self.agent()
+        self.fake(a)
+        calls = []
+
+        def more(rnd):
+            calls.append(rnd)
+            return [self.rec(f"x{rnd}", ok=False)]
+        counts, _ = a.download_until([self.rec("a")], 5, True, True, more, 2)
+        self.assertEqual((counts["pdf"], calls), (1, [1, 2]))
+
+    def test_no_more_callback_behaves_like_plain_download(self):
+        a = self.agent()
+        self.fake(a)
+        counts, offered = a.download_until([self.rec("a"), self.rec("b", ok=False)], 5, True, True, None)
+        self.assertEqual((counts["pdf"], len(offered)), (1, 2))
+
+    def test_cli_count_deepens_search(self):
+        reg = SiteRegistry(self.sites_path)
+        reg.put(make_site())
+        reg.save()
+        out = []
+        calls = []
+        real = Agent.search
+
+        def spy(self_, specs, names, limit):
+            calls.append(limit)
+            return real(self_, specs, names, limit)
+        with mock.patch.object(cli, "log", out.append), mock.patch.object(Agent, "search", spy):
+            rc = cli.main(["manual", "--out", str(Path(self.tmp.name, "lib")), "--sites-file", str(self.sites_path),
+                           "--email", "t@e.org", "-q", "graph", "--site", "mysite", "--limit", "5", "-n", "3", "--deepen-rounds", "2"])
+        text = "\n".join(out)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(calls[0], 5)
+        self.assertIn("Набрано", text)                                                         # цель недостижима на моках → докачка запускалась
+        self.assertLessEqual(len(calls), 3)                                                    # 1 поиск + не больше 2 углублений
+        self.assertIn("из 3 PDF", text)
+        run = next((Path(self.tmp.name) / "lib" / "runs").iterdir())
+        meta = json.loads((run / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["target"]["requested"], 3)
+
+    def test_count_validation(self):
+        with self.assertRaises(SystemExit):
+            cli.main(["manual", "-q", "graph", "--count", "0", "--dry-run"])
 
 
 if __name__ == "__main__":

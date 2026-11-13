@@ -11,7 +11,9 @@ download_retries = 2               # попыток на файл (обычны�
 pdf_only = false                   # true: оставлять только статьи с реально скачанным PDF (как --pdf-only)
 pubmed_pmc = true                  # PubMed ищет ещё и в PMC и качает оттуда OA-PDF (false — выключить)
 custom_sites = "custom_sites.json"   # свои сайты (создаётся командой `sites add`)
-max_downloads = 20
+max_downloads = 20                 # потолок успешных скачиваний за запуск (--max-downloads)
+deepen_rounds = 5                  # при --count N: сколько раз углублять поиск, если N PDF ещё не набрано
+deepen_limit_cap = 1000            # при углублении лимит на источник растёт ×2, но не выше этого значения
 
 [keys]                             # необязательно: лучше через переменные окружения
 ncbi = ""                          # PubMed: 10 запр./с вместо 3
@@ -25,6 +27,7 @@ base_url = ""                      # пусто = http://127.0.0.1:11434 (ollama
 model = "gemma4"
 temperature = 0.2
 timeout = 300
+num_ctx = 8192                      # окно контекста Ollama; без него Ollama режет длинный промпт (заметки из .tex)
 
 [auto]
 rounds = 2                         # 1 = без уточнения плана

@@ -27,9 +27,10 @@ from .wizard import interview
 DEFAULT_CFG = {
     "email": "", "tool": "litagent", "out": "library", "sources": DEFAULT_SOURCES,
     "limit_per_source": 50, "max_downloads": 20, "cache_ttl": 86400, "custom_sites": DEFAULT_FILE, "pubmed_pmc": True, "pdf_only": False,
+    "deepen_rounds": 5, "deepen_limit_cap": 1000,
     "download_workers": 4, "download_timeout": 25, "download_retries": 2,
     "keys": {"ncbi": "", "openalex": "", "s2": "", "core": ""},
-    "llm": {"provider": "ollama", "base_url": "", "model": "gemma4", "temperature": 0.2, "timeout": 300, "api_key": ""},
+    "llm": {"provider": "ollama", "base_url": "", "model": "gemma4", "temperature": 0.2, "timeout": 300, "api_key": "", "num_ctx": 8192},
     "auto": {"rounds": 2, "min_results": 10, "llm_filter": False, "min_score": 6, "notes": []},
 }
 ENV_KEYS = {"ncbi": "NCBI_API_KEY", "openalex": "OPENALEX_API_KEY", "s2": "S2_API_KEY", "core": "CORE_API_KEY"}
@@ -86,6 +87,9 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--pdf-only", action="store_true", help="оставить только статьи с реально доступным полным PDF "
                                                            "(включает --oa-only; проверка = скачивание, XML не берётся)")
     p.add_argument("--max-downloads", type=int, help="максимум успешных скачиваний за запуск")
+    p.add_argument("-n", "--count", type=int, metavar="N", help="скачать ровно N статей с PDF: поиск углубляется, пока не наберётся N "
+                                                               "(включает --pdf-only и --max-downloads N)")
+    p.add_argument("--deepen-rounds", type=int, metavar="K", help="сколько раз при --count можно углублять поиск (по умолчанию 5)")
     p.add_argument("--dry-run", action="store_true", help="показать запросы и выйти (без обращений к источникам)")
 
 
@@ -125,6 +129,10 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["download_workers"] = max(1, a.workers)
     if getattr(a, "no_pmc", False):
         cfg["pubmed_pmc"] = False
+    if getattr(a, "count", None) is not None:
+        if a.count < 1:
+            raise SystemExit("--count должен быть положительным числом.")
+        a.pdf_only = True                                 # «N статей» = N реально скачанных PDF
     if cfg.get("pdf_only") and hasattr(a, "pdf_only"):
         a.pdf_only = True
     if getattr(a, "pdf_only", False):
@@ -142,6 +150,10 @@ def apply_overrides(cfg: dict, a) -> dict:
                                                  if n not in cfg["sources"] and n not in SOURCE_CLASSES]
     if getattr(a, "max_downloads", None) is not None:
         cfg["max_downloads"] = a.max_downloads
+    if getattr(a, "count", None) is not None:
+        cfg["max_downloads"] = a.count
+    if getattr(a, "deepen_rounds", None) is not None:
+        cfg["deepen_rounds"] = max(0, a.deepen_rounds)
     return cfg
 
 
@@ -162,7 +174,7 @@ def need_email(cfg: dict) -> bool:
     return False
 
 
-def finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=None) -> int:
+def finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=None, more=None) -> int:
     counts = None
     records = agent.rank(records)
     log(f"\nУникальных записей: {len(records)}")
@@ -173,7 +185,15 @@ def finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=
         log(f"\nСкачивание (до {cfg['max_downloads']} " + ("статей с полным PDF" if pdf_only else "файлов")
             + ", только легальные OA-копии):")
         t0, st0 = time.monotonic(), dict(agent.client.stats)
-        counts = agent.download(records, cfg["max_downloads"], args.oa_only, pdf_only)
+        if getattr(args, "count", None) is not None:       # докачка: углублять поиск, пока не наберётся N PDF
+            counts, records = agent.download_until(records, cfg["max_downloads"], args.oa_only, True, more,
+                                                   int(cfg.get("deepen_rounds", 5)))
+            extra["target"] = {"requested": args.count, "reached": counts["pdf"] + counts["exists"], "candidates": len(records)}
+            if extra["target"]["reached"] < args.count:
+                log(f"⚠ Набрано {extra['target']['reached']} из {args.count} PDF: доступные источники исчерпаны или достигнут "
+                    f"предел --deepen-rounds. Добавьте источники (--sources), расширьте тему/годы или увеличьте --deepen-rounds.")
+        else:
+            counts = agent.download(records, cfg["max_downloads"], args.oa_only, pdf_only)
         st1 = agent.client.stats
         log(f"\nИтог скачивания: {counts}")
         log(f"Скачивание заняло {time.monotonic() - t0:.0f} с (потоков: {agent.workers}; запросов: "
@@ -191,6 +211,24 @@ def finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=
     run_dir = agent.finish(mode, specs, records, {"downloads": counts, **extra})
     log(f"Библиотека: {agent.lib.root}  |  отчёт запуска: {run_dir}")
     return 0
+
+
+# ------------------------------------------------------------------ докачка (--count)
+def make_deepener(agent: Agent, specs, names, limit: int, cfg: dict, post=None):
+    """Возвращает more(round): повторяет поиск с лимитом на источник ×2 на каждом раунде (не выше deepen_limit_cap).
+    Первые `limit` результатов совпадают с уже проверенными — их отсекает download_until; HTTP-кэш удешевляет повторы."""
+    cap = max(limit, int(cfg.get("deepen_limit_cap", 1000)))
+    prev = [limit]
+
+    def more(rnd: int):
+        new_limit = min(limit * 2 ** rnd, cap)
+        if new_limit <= prev[0]:
+            return []                                      # глубже источники не отдадут
+        prev[0] = new_limit
+        log(f"  лимит на источник: {new_limit}")
+        recs = agent.rank(agent.search(specs, names, new_limit))
+        return post(recs) if post else recs
+    return more
 
 
 # ------------------------------------------------------------------ manual
@@ -231,7 +269,8 @@ def cmd_manual(a) -> int:
     limit = a.limit or cfg["limit_per_source"]
     log(f"Ручной режим: {len(specs)} запрос(ов), источники: {', '.join(names)}, лимит {limit}/источник")
     records = agent.search(specs, names, limit)
-    return finish_and_report(agent, "manual", specs, records, a, cfg)
+    more = make_deepener(agent, specs, names, limit, cfg)
+    return finish_and_report(agent, "manual", specs, records, a, cfg, more=more)
 
 
 # ------------------------------------------------------------------ auto
@@ -240,7 +279,7 @@ def make_llm(cfg: dict, a) -> LLM | None:
         return None
     c = cfg["llm"]
     llm = LLM(a.llm_provider or c["provider"], a.llm_url or c["base_url"] or None, a.model or c["model"],
-              float(c["temperature"]), int(c["timeout"]), c.get("api_key") or None)
+              float(c["temperature"]), int(c["timeout"]), c.get("api_key") or None, int(c.get("num_ctx") or 8192))
     if not llm.ping():
         log(f"⚠ Локальная LLM не отвечает ({llm.provider} @ {llm.base_url}). Запустите её (например `ollama serve`) "
             f"или используйте --no-llm. Продолжаю с эвристикой.")
@@ -286,7 +325,17 @@ def cmd_auto(a) -> int:
         before = len(records)
         records = llm_filter(llm, goal, records, float(thr), log=log)
         log(f"  оставлено {len(records)} из {before}")
-    return finish_and_report(agent, "auto", specs, records, a, cfg, {"goal": goal, "rounds": plan_log})
+    more = None
+    if getattr(a, "count", None) is not None:
+        last = plan_log[-1]["round"] if plan_log else None            # углубляем то, что реально сработало в последнем раунде
+        used = list(dict.fromkeys(e["source"] for e in agent.runlog
+                                  if e.get("round") == last and "error" not in e and "skipped" not in e)) or names
+        post = None
+        if llm and (a.llm_filter or au.get("llm_filter")):
+            thr = a.min_score if a.min_score is not None else au["min_score"]
+            post = lambda recs: llm_filter(llm, goal, recs, float(thr), log=log)          # noqa: E731
+        more = make_deepener(agent, specs[-1:], used, a.limit or cfg["limit_per_source"], cfg, post)
+    return finish_and_report(agent, "auto", specs, records, a, cfg, {"goal": goal, "rounds": plan_log}, more=more)
 
 
 # ------------------------------------------------------------------ check / notes

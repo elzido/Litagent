@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from .llm import LLM, LLMError
 from .models import Record, SearchSpec, _clean_term, current_year, dedupe, parse_topic
-from .notes import Notes
+from .notes import ROW_PITFALLS, ROW_SYNTAX, Notes
 from .policy import Policy
 
 SCHEMA = """{
@@ -26,6 +26,8 @@ SCHEMA = """{
   "max_per_source": 50
 }"""
 
+PLAN_NOTE_LEN = 320            # символов на одну строку заметки в промпте планировщика (промпт должен влезать в контекст)
+
 
 @dataclass
 class Plan:
@@ -41,7 +43,7 @@ class Plan:
 def build_system(policy: Policy, notes: Notes, available: list[str]) -> str:
     about = "\n".join(f"- {n}: {policy.sources_info.get(n, {}).get('about', '')}" for n in available)
     hints = "\n".join(f"- {n}: {policy.sources_info.get(n, {}).get('hint', '')}" for n in available)
-    file_notes = notes.for_sources(available)
+    file_notes = notes.for_sources(available, rows=(ROW_SYNTAX, ROW_PITFALLS), maxlen=PLAN_NOTE_LEN)
     parts = [
         "You are the query-planning component of a scientific-literature download agent.",
         "Reply with ONE JSON object and nothing else. No markdown, no comments.",
@@ -73,17 +75,62 @@ def build_system(policy: Policy, notes: Notes, available: list[str]) -> str:
     if custom:
         parts += ["", "USER-ADDED SOURCES (full request format as configured by the user):", *custom]
     if file_notes:
-        parts += ["", "NOTES FROM THE USER'S ANALYTICAL FILE (syntax, pitfalls, limits, blocking behaviour):", file_notes]
-    g = notes.global_text()
-    if g:
-        parts += ["", "GLOBAL NOTES FROM THE FILE:", g]
-    u = notes.user_notes()
+        parts += ["", "NOTES FROM THE USER'S ANALYTICAL FILE (query syntax and pitfalls; the notes are in Russian, your JSON must be in English):", file_notes]
+    if notes.agent_lines:
+        parts += ["", "AGENT NOTES FROM THE FILE:", *[f"- {a[:300]}" for a in notes.agent_lines]]
+    u = notes.user_notes(1500)
     if u:
         parts += ["", "USER NOTES (highest priority):", u]
     return "\n".join(parts)
 
 
 # ------------------------------------------------------------------ валидация
+_SRC_ALIASES = {"semantic scholar": "semanticscholar", "semantic_scholar": "semanticscholar", "s2": "semanticscholar",
+                "europe pmc": "europepmc", "europe_pmc": "europepmc", "epmc": "europepmc",
+                "pubmed central": "pmc", "google scholar": "google_scholar", "scholar": "google_scholar",
+                "open alex": "openalex", "cross ref": "crossref"}
+_CYR = re.compile("[А-Яа-яЁё]")
+
+
+def _norm_source(s: str, available: list[str]) -> str | None:
+    t = s.strip().lower()
+    t = _SRC_ALIASES.get(t, t)
+    by_low = {a.lower(): a for a in available}
+    if t in by_low:
+        return by_low[t]
+    t2 = re.sub(r"[\s_\-.]+", "", t)
+    for a in available:
+        if re.sub(r"[\s_\-.]+", "", a.lower()) == t2:
+            return a
+    return None
+
+
+def normalize_plan(d) -> dict:
+    """Модели часто заворачивают план ({"plan": {...}}), кладут группы строкой/словарём, пишут ключи в другом регистре."""
+    if not isinstance(d, dict):
+        raise ValueError("ответ модели — не JSON-объект")
+    for _ in range(2):                                    # {"plan": {...}} / {"query": {...}}
+        if "groups" not in {k.lower() for k in d}:
+            inner = next((v for k, v in d.items() if k.lower() in ("plan", "query", "search", "result") and isinstance(v, dict)), None)
+            if inner:
+                d = inner
+    d = {str(k).lower(): v for k, v in d.items()}
+    g = d.get("groups")
+    if g is None:
+        g = d.get("terms") or d.get("keywords")
+    if isinstance(g, str):
+        g = [[t] for t in re.split(r"[;\n]+", g) if t.strip()]
+    elif isinstance(g, dict):
+        g = list(g.values())
+    d["groups"] = g
+    if isinstance(d.get("sources"), str):
+        d["sources"] = [x for x in re.split(r"[,;|\s]+", d["sources"]) if x]
+    for k in ("exclude", "arxiv_categories"):
+        if isinstance(d.get(k), str):
+            d[k] = [x for x in re.split(r"[,;]+", d[k]) if x.strip()]
+    return d
+
+
 def _strs(x, max_items: int, max_len: int = 80) -> list[str]:
     out = []
     for t in (x if isinstance(x, list) else []):
@@ -105,6 +152,7 @@ def _year(v):
 
 
 def plan_to_spec(plan: dict, available: list[str], defaults: dict, source: str = "llm") -> Plan:
+    plan = normalize_plan(plan)
     groups = []
     for g in (plan.get("groups") or [])[:6]:
         terms = _strs([g] if isinstance(g, str) else g, 8)
@@ -112,11 +160,18 @@ def plan_to_spec(plan: dict, available: list[str], defaults: dict, source: str =
             groups.append(terms)
     if not groups:
         raise ValueError("в плане нет непустого 'groups'")
-    srcs = [s for s in (plan.get("sources") or []) if isinstance(s, str) and s in available] or list(available)
+    srcs = []
+    for x in (plan.get("sources") or []):
+        n = _norm_source(x, available) if isinstance(x, str) else None
+        if n and n not in srcs:
+            srcs.append(n)
+    srcs = srcs or list(available)
     raw = {}
     if isinstance(plan.get("raw"), dict):
-        raw = {k: v.strip()[:600] for k, v in plan["raw"].items()
-               if k in available and isinstance(v, str) and v.strip()}
+        for k, v in plan["raw"].items():
+            n = _norm_source(k, available) if isinstance(k, str) else None
+            if n and isinstance(v, str) and v.strip():
+                raw[n] = v.strip()[:600]
     d = defaults
     yf, yt = _year(plan.get("year_from")), _year(plan.get("year_to"))
     if yf and yt and yf > yt:
@@ -183,7 +238,16 @@ def heuristic_plan(goal: str, available: list[str], defaults: dict) -> Plan:
 def request_plan(llm: LLM, policy: Policy, notes: Notes, goal: str, available: list[str], defaults: dict) -> Plan:
     system = build_system(policy, notes, available)
     user = f"Today: {datetime.date.today().isoformat()}\nResearch goal: {goal}"
-    return plan_to_spec(llm.chat_json(system, user), available, defaults)
+    plan = plan_to_spec(llm.chat_json(system, user), available, defaults)
+    if _CYR.search(goal) and _CYR.search(" ".join(t for g in plan.spec.groups for t in g)):
+        retry = user + "\n\nYour previous plan contained non-English terms. Translate ALL terms to English and reply with the JSON again."
+        try:
+            p2 = plan_to_spec(llm.chat_json(system, retry), available, defaults)
+            if not _CYR.search(" ".join(t for g in p2.spec.groups for t in g)):
+                return p2
+        except (LLMError, ValueError):
+            pass
+    return plan
 
 
 def summarize_results(records: list[Record], runlog: list[dict], n_titles: int = 12) -> str:

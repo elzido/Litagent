@@ -179,6 +179,46 @@ class Agent:
                 fill()
         return counts
 
+    def download_until(self, records: list[Record], target: int, oa_only: bool = False, pdf_only: bool = True,
+                       more=None, max_rounds: int = 5) -> tuple[dict, list[Record]]:
+        """Качает, пока не наберётся target статей (при pdf_only — именно PDF). Если кандидаты кончились, а цель не достигнута,
+        вызывает more(round) -> list[Record] | None: следующую, более глубокую выдачу (новые записи фильтруются от уже проверенных).
+        Останавливается, когда цель достигнута, more вернул пусто/None или исчерпаны max_rounds дополнительных раундов.
+        Возвращает (суммарные счётчики, все предложенные записи: проверенные и нет)."""
+        total = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0}
+        offered = list(records)
+        seen = {k for r in offered for k in r.keys()}
+        batch, rnd = list(records), 0
+        while True:
+            have = total["pdf"] + total["exists"] + (0 if pdf_only else total["xml"])
+            if have >= target:
+                break
+            if batch:
+                c = self.download(batch, target - have, oa_only, pdf_only)
+                for k, v in c.items():
+                    total[k] += v
+                have = total["pdf"] + total["exists"] + (0 if pdf_only else total["xml"])
+                if have >= target:
+                    break
+            if more is None or rnd >= max_rounds:
+                break
+            rnd += 1
+            self.log(f"\nНабрано {have} из {target}: углубляю поиск (доп. раунд {rnd} из {max_rounds})…")
+            fresh = more(rnd) or []
+            batch = []
+            for r in fresh:
+                ks = r.keys() or [r.primary_key()]
+                if any(k in seen for k in ks):
+                    continue
+                seen.update(ks)
+                batch.append(r)
+            self.log(f"  новых кандидатов: {len(batch)}")
+            if not batch:
+                self.log("  глубже источники ничего не дают — останавливаюсь.")
+                break
+            offered += batch
+        return total, offered
+
     # ------------------------------------------------------------ итог
     def finish(self, mode: str, specs: list[SearchSpec], records: list[Record], extra: dict | None = None) -> Path:
         self.lib.save()
