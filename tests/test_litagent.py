@@ -1040,7 +1040,7 @@ class TestPmcDownload(PmcBase):
     def test_package_with_only_supplements_fails_honestly(self):
         a, r, st = self.fetch("PMC555")
         self.assertTrue(st.startswith("failed") and "нет основного PDF" in st, st)
-        self.assertEqual(list((a.lib.root / "pdf").iterdir()), [])
+        self.assertEqual([x for x in (a.lib.root / "pdf").rglob("*") if x.is_file()], [])
 
     def test_not_open_access_and_site_never_touched(self):
         a, r, st = self.fetch("PMC444")
@@ -1189,7 +1189,7 @@ class TestPdfOnly(CustomBase):
         meta = json.loads((run / "run.json").read_text(encoding="utf-8"))["pdf_only"]
         self.assertEqual((meta["with_pdf"], meta["dropped"]), (1, 2))
         self.assertEqual(len(meta["dropped_titles"]), 2)
-        self.assertEqual(len(list((Path(self.tmp.name) / "lib" / "pdf").glob("*.pdf"))), 1)
+        self.assertEqual(len(list((Path(self.tmp.name) / "lib" / "pdf" / "mysite").glob("*.pdf"))), 1)      # папка = имя сайта
 
     def test_without_flag_everything_is_listed(self):
         rc, out = self.cli()
@@ -1329,7 +1329,7 @@ class TestFastDownload(unittest.TestCase):
         self.assertTrue(st.startswith("failed") and "лендинг" in st, st)
         self.assertLess(sv.html_sent, 20 * 1024 * 1024)                                  # из 50 МБ клиент не прочитал и половины
         self.assertLess(time.monotonic() - t0, 5)
-        self.assertEqual(list(Path(self.tmp.name, "lib", "pdf").glob("*")), [])          # недокачанного не осталось
+        self.assertEqual([x for x in Path(self.tmp.name, "lib", "pdf").rglob("*") if x.is_file()], [])          # недокачанного не осталось
 
     def test_dead_host_is_skipped_after_a_few_failures(self):
         s_ = socket.socket()
@@ -1489,6 +1489,157 @@ class TestDownloadUntil(CustomBase):
     def test_count_validation(self):
         with self.assertRaises(SystemExit):
             cli.main(["manual", "-q", "graph", "--count", "0", "--dry-run"])
+
+
+# ====================================================================== пресеты и папки источников
+from argparse import Namespace                                                                # noqa: E402
+from litagent import presets                                                                  # noqa: E402
+from litagent.store import Library                                                            # noqa: E402
+
+
+class TestPresets(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.file = str(Path(self.tmp.name, "presets.json"))
+
+    @staticmethod
+    def ns(**kw):
+        base = dict(query=None, group=None, exclude=None, raw=None, arxiv_cat=None, topics_file=None, sources=None, site=None,
+                    pick_site=False, limit=None, year_from=None, year_to=None, workers=None, max_downloads=None, count=None,
+                    deepen_rounds=None, oa_only=False, title_only=False, strict=False, no_download=False, pdf_only=False,
+                    no_pmc=False, flat=False)
+        base.update(kw)
+        return Namespace(**base)
+
+    def test_save_load_roundtrip_and_overwrite(self):
+        a = self.ns(query=["graph; neural"], year_from=2020, oa_only=True, sources="pubmed,openalex")
+        self.assertFalse(presets.save(self.file, "gnn", presets.snapshot(a), "описание"))
+        self.assertTrue(presets.save(self.file, "gnn", presets.snapshot(a)))                       # перезапись
+        got = presets.get(self.file, "gnn")
+        self.assertEqual(got, {"query": ["graph; neural"], "oa_only": True, "sources": "pubmed,openalex", "year_from": 2020})
+
+    def test_requires_topic_and_valid_name(self):
+        with self.assertRaises(SystemExit):
+            presets.save(self.file, "empty", presets.snapshot(self.ns(oa_only=True)))
+        for bad in ("", "a/b", "x" * 41, "a b"):
+            with self.assertRaises(SystemExit):
+                presets.check_name(bad)
+        with self.assertRaises(SystemExit):
+            presets.get(self.file, "nope")
+
+    def test_apply_cli_wins_and_lists_append(self):
+        saved = {"query": ["a; b"], "year_from": 2020, "limit": 100, "oa_only": True, "sources": "pubmed", "count": 30}
+        a = presets.apply(self.ns(query=["c"], limit=10, sources="arxiv", max_downloads=5), saved)
+        self.assertEqual((a.query, a.limit, a.year_from, a.oa_only), (["a; b", "c"], 10, 2020, True))
+        self.assertEqual(a.sources, "arxiv")                                                       # свои источники заменяют пресетные
+        self.assertIsNone(a.count)                                                                 # свой --max-downloads заменяет count
+        b = presets.apply(self.ns(site="mysite"), saved)
+        self.assertEqual((b.site, b.sources), ("mysite", None))                                    # --site не смешивается с sources пресета
+
+    def test_bad_values_in_hand_edited_file_are_reported(self):
+        Path(self.file).write_text(json.dumps({"presets": {"x": {"args": {"query": ["q"], "limit": "много", "weird": 1}}}}),
+                                   encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            presets.get(self.file, "x")
+        Path(self.file).write_text("{не json", encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            presets.load(self.file)
+
+    def test_to_cli_quotes_and_remove(self):
+        cmd = presets.to_cli({"query": ["a; b|c"], "oa_only": True, "year_from": 2021})
+        self.assertEqual(cmd, "python -m litagent manual -q 'a; b|c' --year-from 2021 --oa-only")
+        presets.save(self.file, "p", {"query": ["x"]})
+        presets.remove(self.file, "p")
+        self.assertEqual(presets.load(self.file), {})
+
+    def run_cli(self, *argv):
+        out = []
+        with mock.patch.object(cli, "log", out.append):
+            rc = cli.main(list(argv))
+        return rc, "\n".join(out)
+
+    def test_cli_save_then_run_dry(self):
+        rc, out = self.run_cli("manual", "-q", "graph; neural", "--year-from", "2020", "--sources", "pubmed",
+                               "--save-preset", "gnn", "--presets-file", self.file, "--dry-run")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("сохранён", out)
+        rc, out = self.run_cli("manual", "--preset", "gnn", "--presets-file", self.file, "-q", "extra", "--dry-run")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("применён", out)
+        self.assertIn("graph", out)
+        self.assertIn("extra", out)                                                                # -q из CLI добавился к пресету
+        self.assertIn("[2020..]", out)
+        rc, out = self.run_cli("preset", "list", "--presets-file", self.file)
+        self.assertIn("gnn", out)
+        rc, out = self.run_cli("preset", "remove", "gnn", "-y", "--presets-file", self.file)
+        self.assertEqual(presets.load(self.file), {})
+
+
+class TestSourceFolders(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name, "lib")
+
+    @staticmethod
+    def rec(sources, doi="1"):
+        return Record(title="Some long article title here " + doi, doi="10.1/" + doi, sources=list(sources))
+
+    def test_path_uses_first_source_and_custom_site_gets_own_folder(self):
+        lib = Library(self.root)
+        self.assertEqual(lib.path_for(self.rec(["openalex", "pubmed"]), ".pdf").parent.name, "openalex")
+        self.assertEqual(lib.path_for(self.rec(["My-Site"]), ".pdf").parent.name, "my_site")
+        self.assertEqual(lib.path_for(self.rec(["pubmed"]), ".xml").parent, self.root / "xml" / "pubmed")
+        self.assertEqual(lib.path_for(self.rec([]), ".pdf").parent.name, "unknown")
+
+    def test_flat_mode_keeps_old_layout(self):
+        lib = Library(self.root, by_source=False)
+        self.assertEqual(lib.path_for(self.rec(["openalex"]), ".pdf").parent, self.root / "pdf")
+
+    def make_file(self, lib, rec, flat=False):
+        dest = lib.path_for(rec, ".pdf")
+        if flat:
+            dest = self.root / "pdf" / dest.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 test")
+        rec.file = str(dest.relative_to(self.root))
+        lib.register(rec)
+        return dest
+
+    def test_clean_removes_only_agent_files_in_source_folders(self):
+        lib = Library(self.root)
+        mine = self.make_file(lib, self.rec(["arxiv"], "1"))
+        other = self.make_file(lib, self.rec(["empty_after"], "2"))
+        foreign = self.root / "pdf" / "arxiv" / "my_own_notes.pdf"
+        foreign.write_bytes(b"keep me")
+        self.assertEqual(lib.stats()["pdf"], 2)
+        res = lib.clean()
+        self.assertEqual(res["pdf"], 2)
+        self.assertFalse(mine.exists() or other.exists())
+        self.assertTrue(foreign.exists())                                                          # чужой файл не тронут, папка осталась
+        self.assertFalse((self.root / "pdf" / "empty_after").exists())                            # пустая папка источника убрана
+        self.assertEqual(lib.records, {})
+
+    def test_organize_moves_flat_files_and_updates_index(self):
+        lib = Library(self.root, by_source=False)
+        rec = self.rec(["europepmc", "pubmed"])
+        flat = self.make_file(lib, rec, flat=True)
+        lib.save()
+        lib2 = Library(self.root)
+        dry = lib2.organize(dry_run=True)
+        self.assertEqual((dry["by_source"], flat.exists()), ({"europepmc": 1}, True))
+        res = lib2.organize()
+        self.assertEqual(res["moved"], 1)
+        new = self.root / "pdf" / "europepmc" / flat.name
+        self.assertTrue(new.exists() and not flat.exists())
+        self.assertIsNotNone(Library(self.root).find(rec))                                         # индекс знает новый путь
+        self.assertEqual(lib2.organize()["moved"], 0)                                              # повторный запуск ничего не делает
+
+    def test_by_source_counts(self):
+        lib = Library(self.root)
+        self.make_file(lib, self.rec(["mysite"]))
+        self.assertEqual(lib.by_source_counts(), {"mysite": 1})
 
 
 if __name__ == "__main__":

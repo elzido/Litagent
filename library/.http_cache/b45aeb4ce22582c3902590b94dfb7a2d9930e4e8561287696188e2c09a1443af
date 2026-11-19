@@ -1,1 +1,0 @@
-{"version":"6.9","hitCount":0,"request":{"queryString":"((TITLE:radiometry OR ABSTRACT:radiometry) AND (TITLE:cancer OR ABSTRACT:cancer) AND (TITLE:since OR ABSTRACT:since) AND (TITLE:must OR ABSTRACT:must)) AND PUB_YEAR:[2020 TO 2027]","resultType":"core","cursorMark":"*","pageSize":50,"sort":"","synonym":false},"resultList":{"result":[]}}

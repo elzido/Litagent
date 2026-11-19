@@ -18,6 +18,7 @@ from .llm import LLM
 from .models import SearchSpec, parse_topic
 from .notes import Notes
 from .remote import fetch_text, is_url, parse_sites, pick, sanitize
+from . import presets
 from .policy import Policy
 from .planner import auto_search, heuristic_plan, llm_filter, request_plan
 from .sources import DEFAULT_SOURCES, SOURCE_CLASSES, Ctx
@@ -27,7 +28,7 @@ from .wizard import interview
 DEFAULT_CFG = {
     "email": "", "tool": "litagent", "out": "library", "sources": DEFAULT_SOURCES,
     "limit_per_source": 50, "max_downloads": 20, "cache_ttl": 86400, "custom_sites": DEFAULT_FILE, "pubmed_pmc": True, "pdf_only": False,
-    "deepen_rounds": 5, "deepen_limit_cap": 1000,
+    "deepen_rounds": 5, "deepen_limit_cap": 1000, "folders_by_source": True, "presets_file": presets.DEFAULT_FILE,
     "download_workers": 4, "download_timeout": 25, "download_retries": 2,
     "keys": {"ncbi": "", "openalex": "", "s2": "", "core": ""},
     "llm": {"provider": "ollama", "base_url": "", "model": "gemma4", "temperature": 0.2, "timeout": 300, "api_key": "", "num_ctx": 8192},
@@ -76,8 +77,8 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--pick-site", action="store_true", help="выбрать один сайт из списка (вопрос с номерами)")
     p.add_argument("--no-pmc", action="store_true", help="PubMed не ищет в PMC и не скачивает оттуда PDF")
     p.add_argument("--limit", type=int, help="сколько записей брать с каждого источника")
-    p.add_argument("--year-from", type=int)
-    p.add_argument("--year-to", type=int)
+    p.add_argument("--year-from", type=int, metavar="ГОД", help="не старше этого года публикации (включительно)")
+    p.add_argument("--year-to", type=int, metavar="ГОД", help="не новее этого года публикации (включительно)")
     p.add_argument("--oa-only", action="store_true", help="только открытый доступ")
     p.add_argument("--title-only", action="store_true", help="искать только в названиях")
     p.add_argument("--strict", action="store_true", help="локально требовать каждую группу терминов в тексте")
@@ -91,6 +92,7 @@ def add_common(p: argparse.ArgumentParser) -> None:
                                                                "(включает --pdf-only и --max-downloads N)")
     p.add_argument("--deepen-rounds", type=int, metavar="K", help="сколько раз при --count можно углублять поиск (по умолчанию 5)")
     p.add_argument("--dry-run", action="store_true", help="показать запросы и выйти (без обращений к источникам)")
+    p.add_argument("--flat", action="store_true", help="не раскладывать файлы по папкам источников (всё в pdf/ и xml/)")
 
 
 def _resolve_single_site(cfg: dict, a) -> str | None:
@@ -127,6 +129,8 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["custom_sites"] = a.sites_file
     if getattr(a, "workers", None):
         cfg["download_workers"] = max(1, a.workers)
+    if getattr(a, "flat", False):
+        cfg["folders_by_source"] = False
     if getattr(a, "no_pmc", False):
         cfg["pubmed_pmc"] = False
     if getattr(a, "count", None) is not None:
@@ -198,6 +202,10 @@ def finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=
         log(f"\nИтог скачивания: {counts}")
         log(f"Скачивание заняло {time.monotonic() - t0:.0f} с (потоков: {agent.workers}; запросов: "
             f"{st1['requests'] - st0['requests']}, повторов: {st1['retries'] - st0['retries']})")
+        if agent.lib.by_source:
+            per = agent.lib.by_source_counts()
+            if per:
+                log("PDF в библиотеке по источникам: " + ", ".join(f"{k}: {v}" for k, v in per.items()))
         if pdf_only:                                       # в результате остаются только статьи с PDF
             keep = [r for r in records if r.status in ("pdf", "exists")]
             ids = {id(r) for r in keep}
@@ -233,7 +241,15 @@ def make_deepener(agent: Agent, specs, names, limit: int, cfg: dict, post=None):
 
 # ------------------------------------------------------------------ manual
 def cmd_manual(a) -> int:
-    cfg = apply_overrides(load_config(a.config), a)
+    cfg = load_config(a.config)
+    pfile = a.presets_file or cfg.get("presets_file") or presets.DEFAULT_FILE
+    if a.save_preset:
+        presets.check_name(a.save_preset)                 # ошибку в имени лучше показать до поиска
+    if a.preset:
+        a = presets.apply(a, presets.get(pfile, a.preset))
+        log(f"Пресет «{a.preset}» ({pfile}) применён; параметры из командной строки главнее.")
+    snap = presets.snapshot(a) if a.save_preset else None        # до apply_overrides: он дописывает производные флаги
+    cfg = apply_overrides(cfg, a)
     common = dict(year_from=a.year_from, year_to=a.year_to, open_access=a.oa_only,
                   title_only=a.title_only, strict=a.strict, arxiv_cats=a.arxiv_cat or [])
     raw = {}
@@ -258,6 +274,10 @@ def cmd_manual(a) -> int:
             specs.append(s)
     if not specs:
         raise SystemExit("Не задан запрос: используйте -q \"термин1; термин2|синоним; -исключить\", --group или --topics-file")
+    if snap is not None:
+        existed = presets.save(pfile, a.save_preset, snap, a.preset_desc or "")
+        log(f"Пресет «{a.save_preset}» {'обновлён' if existed else 'сохранён'} в {pfile}. "
+            f"Запуск: python -m litagent manual --preset {a.save_preset}")
     agent = Agent(cfg, log)
     names = agent.check_sources(cfg["sources"])
     if a.dry_run:
@@ -577,6 +597,57 @@ def _mb(n: int) -> str:
     return f"{n / 1048576:.1f} МБ"
 
 
+def cmd_preset(a) -> int:
+    cfg = load_config(a.config)
+    pfile = a.presets_file or cfg.get("presets_file") or presets.DEFAULT_FILE
+    if a.action == "list":
+        allp = presets.load(pfile)
+        if not allp:
+            log(f"Пресетов нет ({pfile}). Сохранить: python -m litagent manual -q \"тема\" --save-preset имя --dry-run")
+            return 0
+        for name in sorted(allp):
+            e = allp[name] if isinstance(allp[name], dict) else {}
+            n = len(presets.clean_args(e.get("args", {})).get("query", []))
+            log(f"  {name:<20} тем: {n}  {e.get('description', '')}")
+        return 0
+    if not a.name:
+        raise SystemExit(f"preset {a.action}: укажите имя пресета.")
+    if a.action == "show":
+        args = presets.get(pfile, a.name)
+        log(f"Пресет «{a.name}»:\n{json.dumps(args, ensure_ascii=False, indent=2)}\n\nЭквивалент:\n  {presets.to_cli(args)}")
+        return 0
+    presets.get(pfile, a.name)                                   # понятная ошибка, если такого нет
+    if not a.yes:
+        try:
+            ok = ask(f"Удалить пресет «{a.name}»? Введите «да»: ").strip().lower() in ("д", "да", "y", "yes")
+        except EOFError:
+            ok = False
+        if not ok:
+            log("Отменено.")
+            return 0
+    presets.remove(pfile, a.name)
+    log(f"Пресет «{a.name}» удалён.")
+    return 0
+
+
+def cmd_organize(a) -> int:
+    cfg = load_config(a.config)
+    if a.out:
+        cfg["out"] = a.out
+    root = Path(cfg["out"])
+    if not root.is_dir() or not (root / "index.json").exists():
+        log(f"В {root.resolve()} нет библиотеки litagent (нет index.json) — ничего не делаю.")
+        return 0
+    res = Library(root).organize(dry_run=a.dry_run)
+    per = ", ".join(f"{k}: {v}" for k, v in sorted(res["by_source"].items())) or "—"
+    log(("Будет перенесено" if a.dry_run else "Перенесено") + f" по папкам источников: {per}")
+    if not a.dry_run:
+        log(f"  файлов перенесено: {res['moved']}, пропущено (уже в папке/нет файла/занято): {res['skipped']}")
+    for e in res["errors"][:5]:
+        log(f"  ошибка: {e}")
+    return 0 if not res["errors"] else 1
+
+
 def cmd_clean(a) -> int:
     cfg = load_config(a.config)
     if a.out:
@@ -615,8 +686,16 @@ def cmd_clean(a) -> int:
     return 1 if res["errors"] else 0
 
 
+class RuParser(argparse.ArgumentParser):
+    """ArgumentParser с русским описанием -h; подпарсеры наследуют этот класс."""
+    def __init__(self, *args, **kw):
+        kw["add_help"] = False
+        super().__init__(*args, **kw)
+        self.add_argument("-h", "--help", action="help", help="показать эту справку и выйти")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="litagent", description="Агент поиска и легального скачивания научных статей")
+    p = RuParser(prog="litagent", description="Агент поиска и легального скачивания научных статей")
     sub = p.add_subparsers(dest="cmd", required=True)
     m = sub.add_parser("manual", help="ручной режим: запросы задаёте вы")
     add_common(m)
@@ -626,32 +705,36 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--exclude", action="append", help="доп. исключаемые термины 'a|b'")
     m.add_argument("--raw", action="append", metavar="ИСТОЧНИК=ЗАПРОС", help="готовый запрос в родном синтаксисе источника")
     m.add_argument("--arxiv-cat", action="append", help="категория arXiv, например cs.CL")
+    m.add_argument("--preset", metavar="ИМЯ", help="взять параметры из сохранённого пресета (то, что задано в командной строке, главнее)")
+    m.add_argument("--save-preset", metavar="ИМЯ", help="сохранить параметры этого запуска как пресет (с --dry-run — только сохранить)")
+    m.add_argument("--preset-desc", metavar="ТЕКСТ", help="описание для --save-preset")
+    m.add_argument("--presets-file", help="файл пресетов (по умолчанию ./presets.json)")
     m.set_defaults(fn=cmd_manual)
     au = sub.add_parser("auto", help="авто-режим: запрос формирует локальная LLM по цели и заметкам")
     add_common(au)
     au.add_argument("goal", nargs="?", help="цель на естественном языке")
-    au.add_argument("--goal-file")
+    au.add_argument("--goal-file", metavar="ФАЙЛ", help="прочитать цель из текстового файла (вместо аргумента goal)")
     au.add_argument("--notes", action="append", help=".tex с аналитикой (или .md/.txt со своими пометками); можно несколько")
     au.add_argument("--no-llm", action="store_true", help="не использовать LLM (эвристика)")
-    au.add_argument("--llm-provider", choices=["ollama", "openai"])
-    au.add_argument("--llm-url")
-    au.add_argument("--model")
+    au.add_argument("--llm-provider", choices=["ollama", "openai"], help="тип API модели: ollama или openai-совместимый (LM Studio, llama.cpp); по умолчанию ollama")
+    au.add_argument("--llm-url", metavar="АДРЕС", help="адрес сервера модели (ollama: http://127.0.0.1:11434, openai-совместимый: http://localhost:1234/v1)")
+    au.add_argument("--model", metavar="ИМЯ", help="имя модели (по умолчанию gemma4)")
     au.add_argument("--rounds", type=int, help="максимум раундов уточнения плана")
-    au.add_argument("--min-results", type=int)
+    au.add_argument("--min-results", type=int, metavar="N", help="сколько записей считать достаточным, чтобы не уточнять план дальше (по умолчанию 10)")
     au.add_argument("--llm-filter", action="store_true", help="отфильтровать результаты оценкой релевантности LLM")
-    au.add_argument("--min-score", type=float)
+    au.add_argument("--min-score", type=float, metavar="БАЛЛ", help="порог релевантности 0–10 для --llm-filter: записи ниже отбрасываются (по умолчанию 6)")
     au.set_defaults(fn=cmd_auto)
     c = sub.add_parser("check", help="проверить доступность источников и LLM из вашей сети")
     add_common(c)
     c.set_defaults(fn=cmd_check)
     n = sub.add_parser("notes", help="показать, что агент извлёк из .tex/.md (то, что видит LLM)")
-    n.add_argument("files", nargs="+")
-    n.add_argument("--source")
+    n.add_argument("files", nargs="+", help="один или несколько файлов: .tex с аналитикой или .md/.txt со своими пометками")
+    n.add_argument("--source", metavar="СИСТЕМА", help="показать только одну систему из заметок (по умолчанию все)")
     n.set_defaults(fn=cmd_notes)
     st = sub.add_parser("sites", help="свои сайты для поиска: list | add | edit | remove | show | test | import (через вопросы-ответы)")
-    st.add_argument("action", choices=["list", "add", "edit", "remove", "show", "test", "import"])
+    st.add_argument("action", choices=["list", "add", "edit", "remove", "show", "test", "import"], help="что сделать со списком своих сайтов")
     st.add_argument("name", nargs="?", help="имя сайта (edit/remove/show/test) или адрес/файл списка (import)")
-    st.add_argument("--config")
+    st.add_argument("--config", help="путь к litagent.toml (по умолчанию ./litagent.toml)")
     st.add_argument("--sites-file", help="файл со своими сайтами (по умолчанию ./custom_sites.json)")
     st.add_argument("--email", help="e-mail для пробных запросов (опросник и test)")
     st.add_argument("--query", help="для test: тема в мини-языке, по умолчанию 'machine learning'")
@@ -660,11 +743,23 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--only", help="import: добавить только эти сайты (имена или номера через запятую); без --only спросит интерактивно")
     st.add_argument("--enable", action="store_true", help="import: сразу включить сайты (по умолчанию приходят выключенными)")
     st.set_defaults(fn=cmd_sites)
-    hp = sub.add_parser("help", help="справка по темам: start, manual, auto, sites, import, pmc, pdf, speed, clean, llm, files, limits")
-    hp.add_argument("topic", nargs="?")
+    pr = sub.add_parser("preset", help="пресеты ручного режима: list | show | remove")
+    pr.add_argument("action", choices=["list", "show", "remove"], help="list — все пресеты, show — параметры одного, remove — удалить")
+    pr.add_argument("name", nargs="?", help="имя пресета (для show и remove)")
+    pr.add_argument("--config", help="путь к litagent.toml (по умолчанию ./litagent.toml)")
+    pr.add_argument("--presets-file", help="файл пресетов (по умолчанию ./presets.json)")
+    pr.add_argument("-y", "--yes", action="store_true", help="remove: без подтверждения")
+    pr.set_defaults(fn=cmd_preset)
+    og = sub.add_parser("organize", help="разложить уже скачанные файлы по папкам источников (pdf/<источник>/)")
+    og.add_argument("--config", help="путь к litagent.toml (по умолчанию ./litagent.toml)")
+    og.add_argument("--out", help="папка библиотеки")
+    og.add_argument("--dry-run", action="store_true", help="только показать, что будет перенесено")
+    og.set_defaults(fn=cmd_organize)
+    hp = sub.add_parser("help", help="справка по темам: start, manual, auto, presets, sites, import, pmc, pdf, speed, clean, llm, files, limits")
+    hp.add_argument("topic", nargs="?", help="тема справки; без неё — список тем")
     hp.set_defaults(fn=cmd_help)
     cl = sub.add_parser("clean", help="очистить папку со скачанными статьями (pdf/, xml/) и привести индекс в порядок")
-    cl.add_argument("--config")
+    cl.add_argument("--config", help="путь к litagent.toml (по умолчанию ./litagent.toml)")
     cl.add_argument("--out", help="папка библиотеки")
     cl.add_argument("--runs", action="store_true", help="удалить ещё и отчёты запусков (runs/)")
     cl.add_argument("--cache", action="store_true", help="удалить ещё и HTTP-кэш")

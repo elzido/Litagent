@@ -22,7 +22,7 @@ class Agent:
         keys = cfg.get("keys", {})
         if keys.get("ncbi"):
             self.policy.intervals["eutils.ncbi.nlm.nih.gov"] = 0.11     # 10 запр./с с ключом
-        self.lib = Library(cfg.get("out", "library"))
+        self.lib = Library(cfg.get("out", "library"), by_source=bool(cfg.get("folders_by_source", True)))
         ua = f"{cfg.get('tool', 'litagent')}/1.0 (mailto:{cfg.get('email') or 'unknown'})"
         self.client = PoliteClient(self.policy, ua, cache_dir=self.lib.cache_dir,
                                    cache_ttl=int(cfg.get("cache_ttl", 86400)), log=log,
@@ -221,6 +221,7 @@ class Agent:
 
     # ------------------------------------------------------------ итог
     def finish(self, mode: str, specs: list[SearchSpec], records: list[Record], extra: dict | None = None) -> Path:
+        self.lib.prune_empty()
         self.lib.save()
         meta = {"run_id": self.run_id, "mode": mode, "started": self.started.isoformat(timespec="seconds"),
                 "queries": self.runlog, "specs": [dataclasses.asdict(s) for s in specs],

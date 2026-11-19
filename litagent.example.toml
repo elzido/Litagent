@@ -12,6 +12,8 @@ pdf_only = false                   # true: оставлять только ст�
 pubmed_pmc = true                  # PubMed ищет ещё и в PMC и качает оттуда OA-PDF (false — выключить)
 custom_sites = "custom_sites.json"   # свои сайты (создаётся командой `sites add`)
 max_downloads = 20                 # потолок успешных скачиваний за запуск (--max-downloads)
+folders_by_source = true           # раскладывать файлы по папкам источников: pdf/<источник>/ (false или --flat — всё в pdf/)
+presets_file = "presets.json"      # пресеты ручного режима (manual --save-preset / --preset)
 deepen_rounds = 5                  # при --count N: сколько раз углублять поиск, если N PDF ещё не набрано
 deepen_limit_cap = 1000            # при углублении лимит на источник растёт ×2, но не выше этого значения
 

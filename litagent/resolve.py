@@ -150,6 +150,7 @@ class Downloader:
                 continue
             is_tgz = kind == "tgz"
             dest = self.lib.path_for(rec, ".xml" if kind == "xml" else ".pdf")
+            dest.parent.mkdir(parents=True, exist_ok=True)
             tmp = dest.with_name(dest.name + (".tgz.part" if is_tgz else ".part"))
             tried += 1
             try:

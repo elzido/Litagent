@@ -9,7 +9,7 @@ TOPICS: dict[str, tuple[str, str]] = {
 2. Проверьте доступность источников и модели:   python -m litagent check
 3. Ручной поиск:  python -m litagent manual -q "crispr; sickle cell" --oa-only
 4. Авто-поиск:    python -m litagent auto "цель на человеческом языке" --notes literature_search_systems.tex
-Подробно: help manual | auto | sites | import | pmc | pdf | speed | clean | llm | files | limits"""),
+Подробно: help manual | auto | presets | sites | import | pmc | pdf | speed | clean | llm | files | limits"""),
     "manual": ("ручной режим", """\
 python -m litagent manual -q "тема" [-q "ещё тема"] [--topics файл.txt]
 Мини-язык темы: `;` — И между группами, `|` — ИЛИ внутри группы, `-слово` — исключение.
@@ -22,7 +22,18 @@ python -m litagent manual -q "тема" [-q "ещё тема"] [--topics фай�
   --title-only       искать по названию                       --strict           каждая группа обязана встретиться
   --max-downloads N  потолок скачиваний                       --dry-run          показать запросы, ничего не отправляя
   -n, --count N      скачать N статей с PDF: поиск углубляется, пока не наберётся N (см. help pdf)
-  --deepen-rounds K  сколько раз можно углублять поиск при --count (по умолчанию 5)"""),
+  --deepen-rounds K  сколько раз можно углублять поиск при --count (по умолчанию 5)
+  --preset имя       взять параметры из пресета (см. help presets)   --save-preset имя   сохранить параметры как пресет
+  --flat             не раскладывать файлы по папкам источников (см. help files)"""),
+    "presets": ("пресеты ручного режима", """\
+Сохранить сложный запрос и запускать его одним именем (файл ./presets.json, настройка presets_file или --presets-file):
+  python -m litagent manual -q "graph; neural|gnn; -survey" --year-from 2020 --sources pubmed,openalex -n 30 --save-preset gnn
+  (с --dry-run параметры только сохраняются, ничего не отправляется; --preset-desc "текст" — описание)
+  python -m litagent manual --preset gnn                   запуск; -q из командной строки ДОБАВЛЯЮТСЯ к темам пресета
+  python -m litagent manual --preset gnn --year-from 2023  значения и --sources/--site/--count из командной строки главнее
+  python -m litagent preset list | show имя | remove имя [-y]
+В пресет попадают темы, группы, исключения, --raw, категории arXiv, источники, годы, --limit, режимы скачивания; e-mail, ключи и пути — нет.
+Файл — обычный JSON, его можно править вручную."""),
     "auto": ("авто-режим (локальная нейросеть)", """\
 python -m litagent auto "цель" [--notes файл.tex|.md|.txt] [--llm-filter] [--rounds N] [--dry-run]
 --site имя / --pick-site: поиск только на одном сайте; нейросеть тогда видит в контексте только его и пишет запрос в его синтаксисе.
@@ -70,14 +81,16 @@ PMCID, is_oa); попыток до 10×max_downloads. В results.csv — тол�
 Если файлы в основном на одном хосте, ускорения не будет (это правило вежливости). В конце печатается время скачивания."""),
     "clean": ("очистка папки со статьями", """\
 python -m litagent clean [--dry-run] [-y] [--runs] [--cache] [--all] [--out папка]
-Удаляет скачанные .pdf/.xml (и .part) из pdf/ и xml/, чужие файлы не трогает; индекс приводится в порядок.
+Удаляет скачанные .pdf/.xml (и .part) из pdf/ и xml/ (включая папки источников), чужие файлы не трогает; пустые папки источников убирает; индекс приводится в порядок.
 --runs — ещё отчёты запусков, --cache — HTTP-кэш, --all — всё сразу. Без -y спрашивает подтверждение."""),
     "llm": ("локальная модель", """\
 По умолчанию: Ollama, модель gemma4, адрес http://127.0.0.1:11434   (ollama pull gemma4)
   --model имя  --llm-url адрес  --llm-provider ollama|openai (LM Studio, llama.cpp: http://localhost:1234/v1)
 Те же настройки — в разделе [llm] файла litagent.toml. Проверка связи: python -m litagent check"""),
     "files": ("какие файлы создаются", """\
-library/pdf, library/xml   скачанные статьи          library/index.json   что уже скачано (повторно не качается)
+library/pdf/<источник>/, library/xml/<источник>/   скачанные статьи по папкам сайтов-источников (openalex, pubmed, имя вашего сайта…)
+python -m litagent organize [--dry-run]   разложить по папкам уже скачанное; --flat или folders_by_source = false — не раскладывать
+library/index.json   что уже скачано (повторно не качается)
 library/runs/<время>/      run.json (запросы, ошибки) и results.csv (статусы)       library/.http_cache  кэш ответов
 custom_sites.json          свои сайты (создаётся при sites add / sites import)       litagent.toml        ваши настройки"""),
     "limits": ("что агент соблюдает всегда", """\

@@ -5,17 +5,21 @@ import csv
 import hashlib
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
 from .models import Record, safe_name
 
 ARTICLE_EXT = {".pdf", ".xml", ".part"}     # что считается скачанной статьёй при очистке
+# Файл, созданный агентом: Автор_Год_Название_<8 hex>.pdf|xml[.tgz][.part]. В подпапках источников очистка трогает только такие файлы.
+OURS = re.compile(r"_[0-9a-f]{8}\.(?:pdf|xml)(?:\.tgz)?(?:\.part)?$", re.I)
 
 
 class Library:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, by_source: bool = True):
         self.root = Path(root)
+        self.by_source = by_source                # pdf/<источник>/файл.pdf, xml/<источник>/файл.xml
         for d in ("pdf", "xml", "runs"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
         self.index_path = self.root / "index.json"
@@ -41,11 +45,21 @@ class Library:
                     return e
         return None
 
+    @staticmethod
+    def source_dir(rec: Record) -> str:
+        """Имя папки источника: первый источник, нашедший статью (для своего сайта — его имя из custom_sites.json)."""
+        name = next((x for x in rec.sources if x), "unknown")
+        d = safe_name(name, 40).lower()
+        return d if d != "paper" or name.lower() == "paper" else "unknown"
+
     def path_for(self, rec: Record, ext: str) -> Path:
         author = safe_name(rec.authors[0], 20) if rec.authors else "anon"
         base = safe_name(f"{author}_{rec.year or 'nd'}_{rec.title}", 90)
         h = hashlib.sha1(rec.primary_key().encode()).hexdigest()[:8]
-        return self.root / ("xml" if ext == ".xml" else "pdf") / f"{base}_{h}{ext}"
+        folder = self.root / ("xml" if ext == ".xml" else "pdf")
+        if self.by_source:
+            folder = folder / self.source_dir(rec)
+        return folder / f"{base}_{h}{ext}"
 
     def register(self, rec: Record) -> None:
         pk = next((self.aliases[k] for k in rec.keys() if k in self.aliases), None) or rec.primary_key()
@@ -64,7 +78,32 @@ class Library:
         d = self.root / sub
         if not d.is_dir():
             return []
-        return [p for p in d.iterdir() if (p.is_file() or p.is_symlink()) and p.suffix.lower() in ARTICLE_EXT]
+        out = [p for p in d.iterdir() if (p.is_file() or p.is_symlink()) and p.suffix.lower() in ARTICLE_EXT]
+        for sd in d.iterdir():                                  # папки источников: только файлы, созданные агентом
+            if sd.is_dir() and not sd.is_symlink():
+                out += [p for p in sd.iterdir() if (p.is_file() or p.is_symlink()) and OURS.search(p.name)]
+        return out
+
+    def prune_empty(self) -> None:
+        """Убирает пустые папки источников (остаются после неудачных скачиваний)."""
+        for sd in self._source_dirs():
+            try:
+                sd.rmdir()
+            except OSError:
+                pass
+
+    def _source_dirs(self) -> list[Path]:
+        return [sd for k in ("pdf", "xml") if (self.root / k).is_dir()
+                for sd in (self.root / k).iterdir() if sd.is_dir() and not sd.is_symlink()]
+
+    def by_source_counts(self) -> dict[str, int]:
+        """{источник: число файлов} по папкам pdf/ (для отчёта)."""
+        d = self.root / "pdf"
+        return {sd.name: n for sd in sorted(d.iterdir()) if sd.is_dir() and (n := len(self._article_files_in(sd)))} if d.is_dir() else {}
+
+    @staticmethod
+    def _article_files_in(sd: Path) -> list[Path]:
+        return [p for p in sd.iterdir() if p.is_file() and OURS.search(p.name)]
 
     def _cache_files(self) -> list[Path]:
         return [p for p in self.cache_dir.iterdir() if p.is_file()] if self.cache_dir.is_dir() else []
@@ -113,9 +152,42 @@ class Library:
                     res["runs"] += 1
                 except OSError as e:
                     res["errors"].append(f"{d.name}: {e}")
+        self.prune_empty()
         self.records = {k: e for k, e in self.records.items() if e.get("file") and (self.root / e["file"]).exists()}
         self.aliases = {a: k for a, k in self.aliases.items() if k in self.records}
         self.save()
+        return res
+
+    # ------------------------------------------------------------ разбивка уже скачанного по папкам источников
+    def organize(self, dry_run: bool = False) -> dict:
+        """Переносит файлы из плоских pdf/ и xml/ в pdf/<источник>/ и xml/<источник>/ по данным index.json и обновляет индекс."""
+        res = {"moved": 0, "skipped": 0, "by_source": {}, "errors": []}
+        for e in self.records.values():
+            f = e.get("file")
+            if not f:
+                continue
+            src = self.root / f
+            kind = Path(f).parts[0] if Path(f).parts else ""
+            if kind not in ("pdf", "xml") or len(Path(f).parts) != 2 or not src.is_file():
+                res["skipped"] += 1                              # уже в подпапке, нет файла или нестандартный путь
+                continue
+            name = self.source_dir(Record.from_dict(e))
+            dest = self.root / kind / name / src.name
+            res["by_source"][name] = res["by_source"].get(name, 0) + 1
+            if dry_run:
+                continue
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if dest.exists():
+                    res["skipped"] += 1
+                    continue
+                os.replace(src, dest)
+                e["file"] = str(dest.relative_to(self.root))
+                res["moved"] += 1
+            except OSError as ex:
+                res["errors"].append(f"{src.name}: {ex}")
+        if not dry_run:
+            self.save()
         return res
 
     def write_run(self, run_id: str, meta: dict, records: list[Record]) -> Path:
