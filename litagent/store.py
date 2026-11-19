@@ -129,11 +129,11 @@ class Library:
                 "cache": len(cache), "cache_bytes": self._size(cache),
                 "runs": len(runs), "runs_bytes": self._size(runs), "indexed": len(self.records)}
 
-    def clean(self, runs: bool = False, cache: bool = False) -> dict:
-        """Удаляет скачанные .pdf/.xml (и недокачанные .part) из pdf/ и xml/; чужие файлы и подпапки не трогает.
-        runs=True — ещё и отчёты запусков, cache=True — ещё и HTTP-кэш. Индекс приводится в соответствие с диском."""
+    def clean(self, runs: bool = False, cache: bool = False, articles: bool = True) -> dict:
+        """articles — удалить скачанные .pdf/.xml (и недокачанные .part) из pdf/ и xml/ (чужие файлы не трогает),
+        runs — отчёты запусков (логи: runs/), cache — HTTP-кэш. Индекс приводится в соответствие с диском."""
         res = {"pdf": 0, "xml": 0, "runs": 0, "cache": 0, "bytes": 0, "errors": []}
-        victims = [(k, p) for k in ("pdf", "xml") for p in self._article_files(k)]
+        victims = [(k, p) for k in ("pdf", "xml") for p in self._article_files(k)] if articles else []
         if cache:
             victims += [("cache", p) for p in self._cache_files()]
         for kind, p in victims:

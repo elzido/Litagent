@@ -661,7 +661,7 @@ class TestClean(unittest.TestCase):
             self.fill(root)
             out = []
             with mock.patch.object(cli, "log", out.append):
-                rc = cli.main(["clean", "--out", str(root), "--yes"])
+                rc = cli.main(["clean", "--out", str(root), "--yes", "--articles"])
             self.assertEqual(rc, 0)
             self.assertEqual(list((root / "pdf").glob("*.pdf*")), [])
             self.assertEqual(list((root / "xml").iterdir()), [])
@@ -669,6 +669,29 @@ class TestClean(unittest.TestCase):
             self.assertTrue((root / ".http_cache" / "k").exists())                   # кэш и отчёты остались
             self.assertTrue((root / "runs" / "20260101-000000").exists())
             self.assertEqual(json.loads((root / "index.json").read_text())["records"], {})   # индекс очищен
+
+    def test_clean_default_removes_articles_cache_and_logs(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            self.fill(root)
+            with mock.patch.object(cli, "log", lambda m="": None):
+                self.assertEqual(cli.main(["clean", "--out", str(root), "--yes"]), 0)
+            self.assertEqual(list((root / "pdf").glob("*.pdf*")), [])
+            self.assertEqual(list((root / ".http_cache").iterdir()), [])
+            self.assertEqual(list((root / "runs").iterdir()), [])
+            self.assertTrue((root / "pdf" / "my_notes.txt").exists())                # чужое по-прежнему не тронуто
+
+    def test_clean_selectors_pick_only_what_is_asked(self):
+        for flag, gone in (("--cache", ".http_cache/k"), ("--logs", "runs/20260101-000000"), ("--runs", "runs/20260101-000000")):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d, "lib")
+                self.fill(root)
+                with mock.patch.object(cli, "log", lambda m="": None):
+                    self.assertEqual(cli.main(["clean", "--out", str(root), "--yes", flag]), 0)
+                self.assertFalse((root / gone).exists(), flag)
+                self.assertTrue((root / "pdf" / "a.pdf").exists(), flag)                  # статьи на месте
+                others = {".http_cache/k", "runs/20260101-000000"} - {gone}
+                self.assertTrue(all((root / o).exists() for o in others), flag)           # невыбранное осталось
 
     def test_clean_all_dry_run_and_confirmation(self):
         with tempfile.TemporaryDirectory() as d:

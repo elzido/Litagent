@@ -658,12 +658,17 @@ def cmd_clean(a) -> int:
         return 0
     lib = Library(root)
     st = lib.stats()
-    runs, cache = a.runs or a.all, a.cache or a.all
+    chosen = (a.articles, a.cache, a.logs)
+    if a.all or not any(chosen):                              # без параметров чистим всё
+        articles = cache = runs = True
+    else:                                                    # иначе только выбранное
+        articles, cache, runs = chosen
     log(f"Библиотека: {root.resolve()}")
-    log(f"  статьи: {st['pdf']} PDF + {st['xml']} XML ({_mb(st['articles_bytes'])}), в индексе записей: {st['indexed']}")
-    log(f"  отчёты запусков: {st['runs']} ({_mb(st['runs_bytes'])}){' — будут удалены' if runs else ' — останутся'}")
+    log(f"  статьи: {st['pdf']} PDF + {st['xml']} XML ({_mb(st['articles_bytes'])}), в индексе записей: {st['indexed']}"
+        f"{' — будут удалены' if articles else ' — останутся'}")
+    log(f"  логи (отчёты запусков, runs/): {st['runs']} ({_mb(st['runs_bytes'])}){' — будут удалены' if runs else ' — останутся'}")
     log(f"  HTTP-кэш: {st['cache']} файлов ({_mb(st['cache_bytes'])}){' — будет удалён' if cache else ' — останется'}")
-    todo = st["pdf"] + st["xml"] + (st["runs"] if runs else 0) + (st["cache"] if cache else 0)
+    todo = ((st["pdf"] + st["xml"]) if articles else 0) + (st["runs"] if runs else 0) + (st["cache"] if cache else 0)
     if not todo:
         log("Удалять нечего.")
         return 0
@@ -678,8 +683,8 @@ def cmd_clean(a) -> int:
         if not ok:
             log("Отменено.")
             return 0
-    res = lib.clean(runs=runs, cache=cache)
-    log(f"Удалено: {res['pdf']} PDF, {res['xml']} XML" + (f", {res['runs']} отчётов" if runs else "")
+    res = lib.clean(runs=runs, cache=cache, articles=articles)
+    log(f"Удалено: {res['pdf']} PDF, {res['xml']} XML" + (f", {res['runs']} логов (запусков)" if runs else "")
         + (f", {res['cache']} файлов кэша" if cache else "") + f" ({_mb(res['bytes'])}). Индекс обновлён.")
     for e in res["errors"][:5]:
         log(f"  не удалось: {e}")
@@ -758,12 +763,13 @@ def build_parser() -> argparse.ArgumentParser:
     hp = sub.add_parser("help", help="справка по темам: start, manual, auto, presets, sites, import, pmc, pdf, speed, clean, llm, files, limits")
     hp.add_argument("topic", nargs="?", help="тема справки; без неё — список тем")
     hp.set_defaults(fn=cmd_help)
-    cl = sub.add_parser("clean", help="очистить папку со скачанными статьями (pdf/, xml/) и привести индекс в порядок")
+    cl = sub.add_parser("clean", help="очистить библиотеку: статьи, HTTP-кэш и логи запусков (можно выбрать параметрами) и привести индекс в порядок")
     cl.add_argument("--config", help="путь к litagent.toml (по умолчанию ./litagent.toml)")
     cl.add_argument("--out", help="папка библиотеки")
-    cl.add_argument("--runs", action="store_true", help="удалить ещё и отчёты запусков (runs/)")
-    cl.add_argument("--cache", action="store_true", help="удалить ещё и HTTP-кэш")
-    cl.add_argument("--all", action="store_true", help="статьи + отчёты + кэш")
+    cl.add_argument("--articles", action="store_true", help="удалить скачанные статьи (pdf/, xml/)")
+    cl.add_argument("--cache", action="store_true", help="удалить HTTP-кэш (.http_cache/)")
+    cl.add_argument("--logs", "--runs", dest="logs", action="store_true", help="удалить логи: отчёты запусков (runs/<время>/run.json и results.csv)")
+    cl.add_argument("--all", action="store_true", help="статьи + логи + кэш (то же, что без параметров)")
     cl.add_argument("--dry-run", action="store_true", help="только показать, что будет удалено")
     cl.add_argument("-y", "--yes", action="store_true", help="без вопроса о подтверждении")
     cl.set_defaults(fn=cmd_clean)
