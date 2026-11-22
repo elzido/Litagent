@@ -229,6 +229,38 @@ class TestPipeline(Base):
         self.assertEqual(len(recs), 1)
 
 
+from concurrent.futures import wait as cf_wait                                                   # noqa: E402
+
+
+class TestInterrupt(Base):
+    def test_interrupt_saves_downloaded_to_index(self):
+        a = Agent({"out": self.tmp.name, "email": "t@e.org", "download_workers": 1}, self.logs.append)
+        recs = [Record(title=f"Interrupt paper {i} long enough title", arxiv_id=f"2301.{i:05d}", sources=["arxiv"])
+                for i in range(1, 4)]
+
+        def fake_fetch(rec, pdf_only=False):
+            dest = a.lib.path_for(rec, ".pdf")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(PDF)
+            rec.file = str(dest.relative_to(a.lib.root))
+            return "pdf"
+
+        calls = []
+
+        def fake_wait(fs, return_when=None):
+            calls.append(1)
+            if len(calls) >= 2:                       # Ctrl+C после первого скачанного файла
+                raise KeyboardInterrupt
+            return cf_wait(fs, return_when=return_when)
+
+        with mock.patch.object(a.downloader, "fetch", fake_fetch), mock.patch("litagent.agent.wait", fake_wait):
+            with self.assertRaises(KeyboardInterrupt):
+                a.download(recs, 10)
+        saved = json.loads((Path(self.tmp.name) / "index.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(saved["records"]), 2)    # первый + дожатый при выходе второй; третий не начинался
+        self.assertTrue(all((Path(self.tmp.name) / e["file"]).exists() for e in saved["records"].values()))
+
+
 class FakeLLM:
     def __init__(self, replies):
         self.replies = list(replies)
@@ -1580,7 +1612,7 @@ class TestFastDownload(unittest.TestCase):
     def test_workers_option(self):
         parse = cli.build_parser().parse_args
         self.assertEqual(cli.apply_overrides(dict(cli.DEFAULT_CFG), parse(["manual", "-q", "x", "--workers", "2"]))["download_workers"], 2)
-        self.assertEqual(cli.apply_overrides(dict(cli.DEFAULT_CFG), parse(["manual", "-q", "x"]))["download_workers"], 4)
+        self.assertEqual(cli.apply_overrides(dict(cli.DEFAULT_CFG), parse(["manual", "-q", "x"]))["download_workers"], 10)
         self.assertEqual(self.agent(download_workers=1).workers, 1)
         self.assertEqual(self.agent(download_workers=0).workers, 1)                      # минимум один поток
 
@@ -1818,6 +1850,116 @@ class TestSourceFolders(unittest.TestCase):
         lib = Library(self.root)
         self.make_file(lib, self.rec(["mysite"]))
         self.assertEqual(lib.by_source_counts(), {"mysite": 1})
+
+
+# ====================================================================== параллельный поиск и LLM-фильтр
+import re                                                                                          # noqa: E402
+import threading                                                                                   # noqa: E402
+
+
+class FakeSource:
+    """Источник-заглушка для проверки параллелизма: без сети, с барьером или мгновенный."""
+
+    def __init__(self, name, barrier=None, fail=None, available=True):
+        self.name, self.boolean = name, True
+        self.barrier, self.fail, self._available = barrier, fail, available
+        self.threads = set()
+
+    def available(self):
+        return (True, "") if self._available else (False, "нет ключа (test)")
+
+    def search(self, spec, limit):
+        self.threads.add(threading.current_thread().name)
+        if self.barrier:
+            self.barrier.wait()
+        if self.fail:
+            raise self.fail
+        return [Record(title=f"Paper {self.name} {spec.label} about graphs", doi=f"10.1/{self.name}-{spec.label}")], {"found": 1}
+
+
+class TestParallelSearch(Base):
+    def test_sources_searched_concurrently(self):
+        barrier = threading.Barrier(3, timeout=10)        # последовательный поиск не пройдёт барьер и упадёт
+        fakes = {n: FakeSource(n, barrier=barrier) for n in ("a", "b", "c")}
+        self.agent.sources = fakes
+        recs = self.agent.search([parse_topic("graphs")], ["a", "b", "c"], 5)
+        self.assertEqual(len(recs), 3)
+        self.assertEqual(len(set().union(*(f.threads for f in fakes.values()))), 3)   # три разных потока
+        self.assertEqual([e["source"] for e in self.agent.runlog], ["a", "b", "c"])   # порядок детерминирован
+
+    def test_runlog_order_multi_spec(self):
+        self.agent.sources = {n: FakeSource(n) for n in ("a", "b", "c")}
+        specs = [parse_topic("one"), parse_topic("two")]
+        recs = self.agent.search(specs, ["a", "b", "c"], 5)
+        self.assertEqual(len(recs), 6)
+        self.assertEqual([e["source"] for e in self.agent.runlog], ["a", "b", "c", "a", "b", "c"])
+        self.assertEqual([e["spec"] for e in self.agent.runlog],
+                         [s.describe() for s in specs for _ in range(3)])
+
+    def test_blocked_and_unavailable_dont_break_others(self):
+        self.agent.sources = {"bad": FakeSource("bad", fail=Blocked("HTTP 403")),
+                              "nokey": FakeSource("nokey", available=False),
+                              "good": FakeSource("good")}
+        recs = self.agent.search([parse_topic("one"), parse_topic("two")], ["bad", "nokey", "good"], 5)
+        self.assertEqual(len(recs), 2)
+        self.assertTrue(all(r.sources == ["good"] for r in recs))
+        self.assertTrue(any(e.get("skipped") for e in self.agent.runlog if e["source"] == "nokey"))
+        self.assertTrue(any("error" in e for e in self.agent.runlog if e["source"] == "bad"))
+        self.assertTrue(any("СТОП" in l for l in self.logs))
+
+    def test_empty_tasks(self):
+        self.assertEqual(self.agent.search([], ["pubmed"], 5), [])
+        self.assertEqual(self.agent.search([parse_topic("x")], [], 5), [])
+
+
+class GraderLLM:
+    """Оценивает по номеру статьи в заголовке: нечётные — 10, чётные — 1. Потоки пишет в self.threads."""
+
+    def __init__(self, barrier=None, fail_on=None):
+        self.calls, self.threads = [], set()
+        self.barrier, self.fail_on = barrier, fail_on
+
+    def chat_json(self, system, user, retries=2):
+        self.threads.add(threading.current_thread().name)
+        self.calls.append(user)
+        if self.barrier:
+            self.barrier.wait()
+        if self.fail_on and self.fail_on in user:
+            raise LLMError("тестовый сбой пакета")
+        scores = []
+        for k, line in enumerate((l for l in user.splitlines() if re.match(r"^\d+\. ", l)), 1):
+            num = int(re.search(r"Paper (\d+)", line).group(1))
+            scores.append({"n": k, "score": 10 if num % 2 else 1})
+        return {"scores": scores}
+
+
+class TestParallelFilter(unittest.TestCase):
+    def recs(self, n):
+        return [Record(title=f"Paper {i} " + "x" * 30, doi=f"10.1/{i}") for i in range(1, n + 1)]
+
+    def test_batches_graded_concurrently_order_preserved(self):
+        barrier = threading.Barrier(4, timeout=10)        # все 4 пакета должны оцениваться одновременно
+        llm = GraderLLM(barrier=barrier)
+        recs = self.recs(24)                              # ровно 4 пакета по 6 = число воркеров
+        kept = planner.llm_filter(llm, "goal", recs, 6, log=lambda m: None)
+        self.assertEqual(len(llm.calls), 4)
+        self.assertGreaterEqual(len(llm.threads), 4)
+        self.assertEqual([r.doi for r in kept], [f"10.1/{i}" for i in range(1, 25, 2)])   # нечётные, порядок исходный
+        self.assertTrue(all(r.score is not None for r in recs))
+
+    def test_failed_batch_keeps_unscored_records(self):
+        logs = []
+        llm = GraderLLM(fail_on="Paper 7 ")               # пакет 2 (записи 7–12) падает
+        kept = planner.llm_filter(llm, "goal", self.recs(25), 6, log=logs.append)
+        self.assertTrue(any("пакет 2" in l for l in logs))
+        self.assertEqual(len(kept), 16)                   # 13 нечётных + 3 чётных из упавшего пакета (score None)
+        self.assertTrue(all(r.score is None for r in kept if int(r.doi.split("/")[1]) in (8, 10, 12)))
+
+    def test_single_batch_stays_inline(self):
+        llm = GraderLLM()
+        kept = planner.llm_filter(llm, "goal", self.recs(2), 6, log=lambda m: None)
+        self.assertEqual([r.doi for r in kept], ["10.1/1"])
+        self.assertEqual(llm.threads, {threading.current_thread().name})
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Командная строка: manual | auto | check | notes."""
+"""Командная строка: manual | auto | check | notes | web."""
 from __future__ import annotations
 
 import argparse
@@ -29,12 +29,13 @@ DEFAULT_CFG = {
     "email": "", "tool": "litagent", "out": "library", "sources": DEFAULT_SOURCES,
     "limit_per_source": 50, "max_downloads": 20, "cache_ttl": 86400, "custom_sites": DEFAULT_FILE, "pubmed_pmc": True, "pdf_only": False,
     "deepen_rounds": 5, "deepen_limit_cap": 1000, "folders_by_source": True, "presets_file": presets.DEFAULT_FILE,
-    "download_workers": 4, "download_timeout": 25, "download_retries": 2,
+    "download_workers": 10, "download_timeout": 25, "download_retries": 2,
     "keys": {"ncbi": "", "openalex": "", "s2": "", "core": "", "gigachat": "",
              "gigachat_client_id": "", "gigachat_client_secret": ""},
     "llm": {"provider": "ollama", "base_url": "", "model": "gemma4", "temperature": 0.2, "timeout": 300, "api_key": "", "num_ctx": 8192,
             "scope": "GIGACHAT_API_PERS", "ca_bundle": "", "oauth_url": ""},
-    "auto": {"rounds": 2, "min_results": 10, "llm_filter": False, "min_score": 6, "notes": []},
+    "auto": {"rounds": 2, "min_results": 10, "llm_filter": False, "min_score": 6.0, "notes": []},
+    "web": {"host": "127.0.0.1", "port": 8765, "open_browser": True},
 }
 ENV_KEYS = {"ncbi": "NCBI_API_KEY", "openalex": "OPENALEX_API_KEY", "s2": "S2_API_KEY", "core": "CORE_API_KEY",
             "gigachat": "GIGACHAT_CREDENTIALS",
@@ -87,7 +88,7 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--title-only", action="store_true", help="искать только в названиях")
     p.add_argument("--strict", action="store_true", help="локально требовать каждую группу терминов в тексте")
     p.add_argument("--no-download", action="store_true", help="только найти, не скачивать")
-    p.add_argument("--workers", type=int, help="параллельных скачиваний (по умолчанию 4; 1 — по одному). "
+    p.add_argument("--workers", type=int, help="параллельных скачиваний (по умолчанию 10; 1 — по одному). "
                                               "Паузы и одно соединение на хост сохраняются")
     p.add_argument("--pdf-only", action="store_true", help="оставить только статьи с реально доступным полным PDF "
                                                            "(включает --oa-only; проверка = скачивание, XML не берётся)")
@@ -721,6 +722,17 @@ def cmd_clean(a) -> int:
     return 1 if res["errors"] else 0
 
 
+def cmd_web(a) -> int:
+    from .web import serve
+    cfg = load_config(a.config)
+    w = cfg.get("web") or {}
+    host = a.host or w.get("host") or "127.0.0.1"
+    port = int(a.port or w.get("port") or 8765)
+    serve(config_path=a.config, host=host, port=port,
+          open_browser=not a.no_browser and bool(w.get("open_browser", True)))
+    return 0
+
+
 class RuParser(argparse.ArgumentParser):
     """ArgumentParser с русским описанием -h; подпарсеры наследуют этот класс."""
     def __init__(self, *args, **kw):
@@ -796,7 +808,7 @@ def build_parser() -> argparse.ArgumentParser:
     og.add_argument("--out", help="папка библиотеки")
     og.add_argument("--dry-run", action="store_true", help="только показать, что будет перенесено")
     og.set_defaults(fn=cmd_organize)
-    hp = sub.add_parser("help", help="справка по темам: start, manual, auto, presets, sites, import, pmc, pdf, speed, clean, llm, files, limits")
+    hp = sub.add_parser("help", help="справка по темам: start, manual, auto, presets, sites, import, pmc, pdf, speed, clean, llm, web, files, limits")
     hp.add_argument("topic", nargs="?", help="тема справки; без неё — список тем")
     hp.set_defaults(fn=cmd_help)
     cl = sub.add_parser("clean", help="очистить библиотеку: статьи, HTTP-кэш и логи запусков (можно выбрать параметрами) и привести индекс в порядок")
@@ -809,6 +821,12 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("--dry-run", action="store_true", help="только показать, что будет удалено")
     cl.add_argument("-y", "--yes", action="store_true", help="без вопроса о подтверждении")
     cl.set_defaults(fn=cmd_clean)
+    wb = sub.add_parser("web", help="веб-интерфейс в браузере: поиск, библиотека, запуски, пресеты, сайты и редактор конфига")
+    wb.add_argument("--config", help="путь к litagent.toml (по умолчанию ./litagent.toml)")
+    wb.add_argument("--host", help="адрес сервера (по умолчанию 127.0.0.1 — только этот компьютер; [web] host в конфиге)")
+    wb.add_argument("--port", type=int, help="порт (по умолчанию 8765; [web] port в конфиге)")
+    wb.add_argument("--no-browser", action="store_true", help="не открывать браузер автоматически")
+    wb.set_defaults(fn=cmd_web)
     return p
 
 

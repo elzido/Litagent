@@ -25,10 +25,12 @@ class Library:
         self.index_path = self.root / "index.json"
         self.records: dict[str, dict] = {}
         self.aliases: dict[str, str] = {}
+        self.tags: dict[str, list[str]] = {}        # пользовательские теги по primary key (не трогаются при register)
         if self.index_path.exists():
             try:
                 data = json.loads(self.index_path.read_text(encoding="utf-8"))
                 self.records, self.aliases = data.get("records", {}), data.get("aliases", {})
+                self.tags = data.get("tags", {})
             except (ValueError, OSError):
                 pass
 
@@ -69,9 +71,55 @@ class Library:
 
     def save(self) -> None:
         tmp = self.index_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"records": self.records, "aliases": self.aliases},
+        tmp.write_text(json.dumps({"records": self.records, "aliases": self.aliases, "tags": self.tags},
                                   ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, self.index_path)
+
+    # ------------------------------------------------------------ теги и удаление записей
+    @staticmethod
+    def _norm_tags(tags: list) -> list[str]:
+        clean: list[str] = []
+        for t in tags:
+            t = re.sub(r"\s+", " ", str(t).strip())[:80]
+            if t and t.casefold() not in {x.casefold() for x in clean}:
+                clean.append(t)
+        return clean[:30]
+
+    def set_tags(self, pk: str, tags: list) -> list[str]:
+        if pk not in self.records:
+            raise KeyError(pk)
+        self.tags[pk] = self._norm_tags(tags)
+        return self.tags[pk]
+
+    def all_tags(self) -> list[str]:
+        return sorted({t for ts in self.tags.values() for t in ts}, key=str.casefold)
+
+    def delete(self, pks: list) -> dict:
+        """Удаляет записи вместе с файлами (только внутри библиотеки и только если файл не нужен другой записи)."""
+        gone = set(pks)
+        keep_files = {e.get("file") for k, e in self.records.items() if k not in gone}
+        res = {"deleted": 0, "files": 0, "bytes": 0, "errors": []}
+        for pk in pks:
+            e = self.records.get(pk)
+            if e is None:
+                continue
+            f = e.get("file")
+            if f and f not in keep_files:
+                p = (self.root / f).resolve()
+                if p.is_relative_to(self.root.resolve()) and p.is_file() and p.suffix.lower() in ARTICLE_EXT:
+                    try:
+                        res["bytes"] += p.stat().st_size
+                        p.unlink()
+                        res["files"] += 1
+                    except OSError as ex:
+                        res["errors"].append(f"{p.name}: {ex}")
+            del self.records[pk]
+            res["deleted"] += 1
+        self.aliases = {a: k for a, k in self.aliases.items() if k in self.records}
+        self.tags = {k: t for k, t in self.tags.items() if k in self.records}
+        self.prune_empty()
+        self.save()
+        return res
 
     # ------------------------------------------------------------ очистка
     def _article_files(self, sub: str) -> list[Path]:
@@ -107,6 +155,18 @@ class Library:
 
     def _cache_files(self) -> list[Path]:
         return [p for p in self.cache_dir.iterdir() if p.is_file()] if self.cache_dir.is_dir() else []
+
+    def clear_cache(self) -> dict:
+        """Удаляет только HTTP-кэш ответов; статьи, индекс и запуски не трогает."""
+        res = {"files": 0, "bytes": 0, "errors": []}
+        for p in self._cache_files():
+            try:
+                res["bytes"] += p.stat().st_size
+                p.unlink()
+                res["files"] += 1
+            except OSError as e:
+                res["errors"].append(f"{p.name}: {e}")
+        return res
 
     def _run_dirs(self) -> list[Path]:
         d = self.root / "runs"
@@ -155,6 +215,7 @@ class Library:
         self.prune_empty()
         self.records = {k: e for k, e in self.records.items() if e.get("file") and (self.root / e["file"]).exists()}
         self.aliases = {a: k for a, k in self.aliases.items() if k in self.records}
+        self.tags = {k: t for k, t in self.tags.items() if k in self.records}
         self.save()
         return res
 

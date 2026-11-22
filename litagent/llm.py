@@ -5,6 +5,7 @@ import base64
 import json
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -80,6 +81,7 @@ class LLM:
         self.oauth_url = (oauth_url or GIGACHAT_OAUTH_URL).rstrip("/")
         self._gc_token: str | None = None
         self._gc_expires = 0.0               # мс, как в ответе OAuth
+        self._gc_lock = threading.Lock()     # параллельные запросы (фильтр) не обновляют токен все разом
 
     def _ssl_ctx(self):
         """GigaChat ходит по TLS с сертификатом Минцифры: либо ca_bundle из настроек, либо системное хранилище."""
@@ -95,32 +97,34 @@ class LLM:
         return f"LLM недоступна по {where}: {e}"
 
     def _gigachat_token(self, force: bool = False, timeout: int | None = None) -> str:
-        """Access token GigaChat (живёт 30 минут): OAuth по ключу авторизации, кэшируется до истечения."""
-        now = time.time() * 1000
-        if not force and self._gc_token and now < self._gc_expires - 60_000:
-            return self._gc_token
-        if not self.api_key:
-            raise LLMError("GigaChat: нужны Client ID и Client Secret — [keys] gigachat_client_id и gigachat_client_secret "
-                           "в litagent.toml (или переменные GIGACHAT_CLIENT_ID / GIGACHAT_CLIENT_SECRET); "
-                           "значения выдаются в личном кабинете Sber Studio")
-        req = urllib.request.Request(
-            self.oauth_url, data=urllib.parse.urlencode({"scope": self.scope}).encode(),
-            headers={"Authorization": f"Basic {self.api_key}", "RqUID": str(uuid.uuid4()),
-                     "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self._ssl_ctx()) as r:
-                d = json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            raise LLMError(f"GigaChat OAuth HTTP {e.code}: {e.read()[:300].decode('utf-8', 'replace')} "
-                           f"(проверьте ключ авторизации и scope {self.scope})") from e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise LLMError(self._net_error_text(e, self.oauth_url)) from e
-        token = d.get("access_token")
-        if not token:
-            raise LLMError(f"GigaChat OAuth не вернул токен: {str(d)[:200]}")
-        self._gc_token = token
-        self._gc_expires = float(d.get("expires_at") or now + 30 * 60 * 1000)
-        return token
+        """Access token GigaChat (живёт 30 минут): OAuth по ключу авторизации, кэшируется до истечения.
+        Под замком: при параллельных запросах токен обновляет один поток, остальные ждут и берут готовый."""
+        with self._gc_lock:
+            now = time.time() * 1000
+            if not force and self._gc_token and now < self._gc_expires - 60_000:
+                return self._gc_token
+            if not self.api_key:
+                raise LLMError("GigaChat: нужны Client ID и Client Secret — [keys] gigachat_client_id и gigachat_client_secret "
+                               "в litagent.toml (или переменные GIGACHAT_CLIENT_ID / GIGACHAT_CLIENT_SECRET); "
+                               "значения выдаются в личном кабинете Sber Studio")
+            req = urllib.request.Request(
+                self.oauth_url, data=urllib.parse.urlencode({"scope": self.scope}).encode(),
+                headers={"Authorization": f"Basic {self.api_key}", "RqUID": str(uuid.uuid4()),
+                         "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self._ssl_ctx()) as r:
+                    d = json.loads(r.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                raise LLMError(f"GigaChat OAuth HTTP {e.code}: {e.read()[:300].decode('utf-8', 'replace')} "
+                               f"(проверьте ключ авторизации и scope {self.scope})") from e
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                raise LLMError(self._net_error_text(e, self.oauth_url)) from e
+            token = d.get("access_token")
+            if not token:
+                raise LLMError(f"GigaChat OAuth не вернул токен: {str(d)[:200]}")
+            self._gc_token = token
+            self._gc_expires = float(d.get("expires_at") or now + 30 * 60 * 1000)
+            return token
 
     def _post(self, path: str, payload: dict) -> dict:
         data = json.dumps(payload).encode()

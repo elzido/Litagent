@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>litagent — веб-интерфейс</title>
+<style>
+:root{
+  --bg0:#0e1013; --bg1:#15181e; --bg2:#1c2029; --bg3:#232833;
+  --line:#272d38; --line2:#333a48;
+  --text:#e7e4dd; --muted:#9aa0ab; --dim:#6b7280;
+  --accent:#e2b04a; --accent-soft:rgba(226,176,74,.14); --glow:rgba(226,176,74,.28);
+  --ok:#7fc98f; --ok-bg:rgba(127,201,143,.13);
+  --bad:#e08585; --bad-bg:rgba(224,133,133,.12);
+  --info:#8fb8e8; --info-bg:rgba(143,184,232,.12);
+  --teal:#7fd4c1; --teal-bg:rgba(127,212,193,.12);
+  --r:12px; --ease:cubic-bezier(.22,.61,.36,1);
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg0);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  background-image:radial-gradient(1100px 500px at 85% -10%,rgba(226,176,74,.05),transparent 60%),
+                   radial-gradient(900px 600px at -10% 110%,rgba(143,184,232,.04),transparent 55%);}
+h1,h2,h3{font-family:Georgia,"Times New Roman",serif;font-weight:600;letter-spacing:.2px}
+a{color:var(--info);text-decoration:none}
+a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:6px;border:2px solid var(--bg0)}
+::-webkit-scrollbar-track{background:transparent}
+
+#app{display:flex;min-height:100vh}
+/* ---------- сайдбар ---------- */
+#sidebar{width:236px;flex:none;background:linear-gradient(180deg,var(--bg1),rgba(21,24,30,.6));
+  border-right:1px solid var(--line);padding:22px 14px 16px;display:flex;flex-direction:column;gap:18px;
+  position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:11px;padding:2px 8px}
+.brand svg{flex:none;filter:drop-shadow(0 0 10px var(--glow));animation:breathe 5s var(--ease) infinite}
+@keyframes breathe{0%,100%{filter:drop-shadow(0 0 6px rgba(226,176,74,.18))}50%{filter:drop-shadow(0 0 14px rgba(226,176,74,.4))}}
+.brand .bt{font-family:Georgia,serif;font-size:21px;font-weight:700}
+.brand .bs{display:block;font-size:11px;color:var(--muted);letter-spacing:.4px}
+nav{display:flex;flex-direction:column;gap:3px}
+nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:1px solid transparent;
+  border-radius:10px;padding:9px 12px;color:var(--muted);cursor:pointer;
+  transition:background .18s var(--ease),color .18s var(--ease),border-color .18s var(--ease),transform .18s var(--ease)}
+nav button svg{flex:none;opacity:.85}
+nav button:hover{background:var(--bg2);color:var(--text)}
+nav button.active{background:var(--accent-soft);border-color:rgba(226,176,74,.3);color:var(--accent);
+  box-shadow:0 0 18px rgba(226,176,74,.07) inset}
+.side-foot{margin-top:auto;display:flex;flex-direction:column;gap:7px;padding:0 4px}
+.chip{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);background:var(--bg2);
+  border:1px solid var(--line);border-radius:999px;padding:5px 11px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.chip .dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--dim)}
+.chip.on .dot{background:var(--ok);box-shadow:0 0 8px rgba(127,201,143,.6)}
+.chip.off .dot{background:var(--bad)}
+/* ---------- основная область ---------- */
+#main{flex:1;min-width:0;padding:30px 36px 70px;max-width:1280px}
+.page{display:none;animation:pageIn .28s var(--ease)}
+.page.active{display:block}
+@keyframes pageIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+.page>header{margin-bottom:22px}
+.page h1{margin:0 0 5px;font-size:27px}
+.page .sub{color:var(--muted);font-size:13.5px;margin:0}
+.panel{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin-bottom:18px}
+.panel h2{margin:0 0 14px;font-size:18px}
+.panel h3{margin:18px 0 10px;font-size:15px;color:var(--muted);font-family:system-ui,sans-serif;font-weight:600;
+  text-transform:uppercase;letter-spacing:.8px;font-size:11.5px}
+.grid{display:grid;gap:13px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g6{grid-template-columns:repeat(6,1fr)}
+@media(max-width:1100px){.g6{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){.g2,.g3,.g4,.g6{grid-template-columns:1fr}}
+/* ---------- поля ---------- */
+.field{display:flex;flex-direction:column;gap:5px;min-width:0}
+.fname{font-size:12.5px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.fhelp{font-size:11.5px;color:var(--dim)}
+.ferr{font-size:12px;color:var(--bad);display:none}
+.field.invalid .ferr{display:block}
+.field.invalid input,.field.invalid textarea,.field.invalid select{border-color:rgba(224,133,133,.55)}
+input[type=text],input[type=number],input[type=password],input[type=email],textarea,select{
+  background:var(--bg0);border:1px solid var(--line2);color:var(--text);border-radius:9px;padding:8px 11px;font:inherit;
+  width:100%;transition:border-color .16s var(--ease),box-shadow .16s var(--ease)}
+textarea{resize:vertical;min-height:74px}
+input:focus,textarea:focus,select:focus{outline:none;border-color:rgba(226,176,74,.6);box-shadow:0 0 0 3px rgba(226,176,74,.12)}
+input::placeholder,textarea::placeholder{color:var(--dim)}
+.env-badge{font-size:10.5px;background:var(--info-bg);color:var(--info);border-radius:999px;padding:1px 8px;font-weight:500}
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:38px}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--dim);
+  cursor:pointer;padding:5px;border-radius:7px;line-height:0;transition:color .15s var(--ease)}
+.pw-eye:hover{color:var(--text)}
+/* ---------- чипы-переключатели ---------- */
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.tchip{background:var(--bg0);border:1px solid var(--line2);border-radius:999px;padding:6px 14px;font-size:13px;
+  color:var(--muted);cursor:pointer;transition:all .17s var(--ease);user-select:none}
+.tchip:hover{border-color:var(--dim);color:var(--text);transform:translateY(-1px)}
+.tchip.on{background:var(--accent-soft);border-color:rgba(226,176,74,.55);color:var(--accent);
+  box-shadow:0 0 14px rgba(226,176,74,.12)}
+.tchip .mark{font-size:10.5px;opacity:.7;margin-left:5px}
+/* ---------- кнопки ---------- */
+.btn{display:inline-flex;align-items:center;gap:8px;border-radius:10px;border:1px solid var(--line2);background:var(--bg2);
+  padding:9px 18px;cursor:pointer;font-weight:600;font-size:14px;
+  transition:all .17s var(--ease)}
+.btn:hover{border-color:var(--dim);transform:translateY(-1px)}
+.btn:active{transform:scale(.98)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn.primary{background:linear-gradient(135deg,#e8bc5e,#d99f35);border-color:transparent;color:#221a08;
+  box-shadow:0 2px 14px rgba(226,176,74,.22)}
+.btn.primary:hover{box-shadow:0 4px 24px rgba(226,176,74,.4)}
+.btn.danger{color:var(--bad)}
+.btn.danger:hover{border-color:rgba(224,133,133,.5);background:var(--bad-bg)}
+.btn.small{padding:5px 12px;font-size:12.5px;border-radius:8px}
+.btn.ghost{background:none}
+.launch{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin-top:6px}
+/* ---------- сегмент-переключатель ---------- */
+.seg{position:relative;display:flex;width:340px;max-width:100%;background:var(--bg0);border:1px solid var(--line2);border-radius:11px;padding:3px;margin-bottom:18px}
+.seg .pill{position:absolute;top:3px;bottom:3px;left:3px;width:calc(50% - 3px);background:var(--accent-soft);
+  border:1px solid rgba(226,176,74,.45);border-radius:8px;transition:transform .24s var(--ease);
+  box-shadow:0 0 16px rgba(226,176,74,.1)}
+.seg.right .pill{transform:translateX(100%)}
+.seg button{position:relative;z-index:1;flex:1 1 0;background:none;border:none;padding:7px 10px;cursor:pointer;color:var(--muted);
+  font-weight:600;border-radius:8px;transition:color .2s var(--ease);white-space:nowrap}
+.seg button.active{color:var(--accent)}
+/* ---------- тумблер ---------- */
+.switch{position:relative;display:inline-block;width:40px;height:22px;flex:none}
+.switch input{opacity:0;width:0;height:0;position:absolute}
+.switch .track{position:absolute;inset:0;background:var(--bg3);border:1px solid var(--line2);border-radius:999px;
+  cursor:pointer;transition:all .2s var(--ease)}
+.switch .track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:var(--muted);transition:all .2s var(--ease)}
+.switch input:checked+.track{background:var(--accent-soft);border-color:rgba(226,176,74,.55);box-shadow:0 0 12px rgba(226,176,74,.15)}
+.switch input:checked+.track::after{transform:translateX(18px);background:var(--accent);box-shadow:0 0 8px var(--glow)}
+.switch input:focus-visible+.track{box-shadow:0 0 0 3px rgba(226,176,74,.2)}
+.togglerow{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line)}
+.togglerow:last-child{border-bottom:none}
+.togglerow .tl{font-size:14px}
+.togglerow .td{font-size:12px;color:var(--dim)}
+/* ---------- задача / консоль ---------- */
+#job{border-color:rgba(226,176,74,.3)}
+.job-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.job-head .jt{font-weight:600;flex:1;min-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-size:11.5px;font-weight:700;border-radius:999px;padding:3px 11px;letter-spacing:.3px;white-space:nowrap}
+.badge.running{background:var(--accent-soft);color:var(--accent);animation:pulse 1.6s var(--ease) infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(226,176,74,.25)}50%{box-shadow:0 0 0 6px rgba(226,176,74,0)}}
+.badge.done{background:var(--ok-bg);color:var(--ok)}
+.badge.error{background:var(--bad-bg);color:var(--bad)}
+.badge.cancelled{background:var(--bg3);color:var(--muted)}
+.badge.manual{background:var(--info-bg);color:var(--info)}
+.badge.auto{background:var(--teal-bg);color:var(--teal)}
+.badge.check{background:var(--accent-soft);color:var(--accent)}
+#console{background:#0a0c0f;border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin:0;
+  font:12.5px/1.65 var(--mono);color:#c9cdd6;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+#console .ln{animation:lnIn .22s var(--ease)}
+@keyframes lnIn{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}
+.progress{height:3px;border-radius:3px;background:var(--bg3);overflow:hidden;margin:12px 0 0}
+.progress .bar{height:100%;width:38%;border-radius:3px;background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  animation:slide 1.3s linear infinite}
+@keyframes slide{from{transform:translateX(-110%)}to{transform:translateX(300%)}}
+/* ---------- таблицы ---------- */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{position:sticky;top:0;background:var(--bg2);color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;
+  text-align:left;padding:9px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr{transition:background .14s var(--ease)}
+tbody tr:hover{background:rgba(226,176,74,.035)}
+tbody tr:last-child td{border-bottom:none}
+.rt{font-weight:600;line-height:1.4}
+.ra{color:var(--muted);font-size:12px;margin-top:2px}
+.src-tag{display:inline-block;font-size:11px;background:var(--bg3);border-radius:6px;padding:1px 7px;margin:1px 2px 1px 0;color:var(--muted)}
+.st{font-size:11.5px;font-weight:700;border-radius:7px;padding:2px 9px;white-space:nowrap}
+.st.ok{background:var(--ok-bg);color:var(--ok)}
+.st.info{background:var(--info-bg);color:var(--info)}
+.st.teal{background:var(--teal-bg);color:var(--teal)}
+.st.bad{background:var(--bad-bg);color:var(--bad)}
+.st.mute{background:var(--bg3);color:var(--dim)}
+.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+/* ---------- карточки ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.card{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;
+  transition:border-color .18s var(--ease),transform .18s var(--ease),box-shadow .18s var(--ease)}
+.card:hover{border-color:var(--line2);transform:translateY(-2px);box-shadow:0 6px 22px rgba(0,0,0,.25)}
+.card .ct{font-weight:600;line-height:1.4;margin-bottom:5px}
+.card .cm{color:var(--muted);font-size:12.5px;margin-bottom:9px}
+.card .ca{color:var(--dim);font-size:12.5px;margin:7px 0;max-height:4.6em;overflow:hidden}
+.card .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.stat-chips{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.stat{background:var(--bg1);border:1px solid var(--line);border-radius:10px;padding:9px 16px;font-size:13px;color:var(--muted)}
+.stat b{color:var(--text);font-size:16px;font-variant-numeric:tabular-nums;margin-right:5px}
+.empty{color:var(--dim);text-align:center;padding:38px 20px;font-size:14px}
+.empty code{background:var(--bg2);border-radius:6px;padding:2px 8px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+.toolbar{display:flex;gap:11px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.toolbar input[type=text]{max-width:340px}
+.toolbar select{width:auto;max-width:220px}
+/* ---------- запуски ---------- */
+.run-row{display:flex;align-items:center;gap:14px;padding:13px 16px;border:1px solid var(--line);border-radius:11px;
+  background:var(--bg1);cursor:pointer;margin-bottom:9px;transition:all .17s var(--ease)}
+.run-row:hover{border-color:rgba(226,176,74,.4);transform:translateX(3px)}
+.run-row .rid{font-family:var(--mono);font-size:12.5px;color:var(--muted);white-space:nowrap}
+.run-row .rsum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px}
+.run-row .rnum{color:var(--muted);font-size:12.5px;white-space:nowrap}
+.run-row .run-del{background:none;border:none;color:var(--dim);cursor:pointer;padding:4px 6px;border-radius:8px;
+  line-height:0;transition:all .16s var(--ease);flex:none}
+.run-row .run-del:hover{color:var(--bad);background:var(--bad-bg);transform:scale(1.1)}
+.run-row .run-del:active{transform:scale(.95)}
+.meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px}
+.meta{background:var(--bg0);border:1px solid var(--line);border-radius:9px;padding:9px 13px}
+.meta .mk{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.meta .mv{font-size:14.5px;font-weight:600;margin-top:2px;word-break:break-word}
+details.plan{background:var(--bg0);border:1px solid var(--line);border-radius:9px;padding:9px 13px;margin-bottom:8px}
+details.plan summary{cursor:pointer;color:var(--muted);font-size:13px}
+details.plan pre{font:12px/1.6 var(--mono);color:#c9cdd6;overflow-x:auto;margin:9px 0 2px}
+details.adv{margin-top:14px}
+details.adv summary{cursor:pointer;color:var(--muted);font-size:13px;user-select:none}
+details.adv summary:hover{color:var(--text)}
+/* ---------- конфиг ---------- */
+#cfg-form .panel{position:relative}
+.cfg-actions{position:sticky;bottom:0;background:linear-gradient(180deg,rgba(14,16,19,0),var(--bg0) 30%);
+  padding:18px 0 6px;display:flex;align-items:center;gap:14px;z-index:5}
+#cfg-path{font-family:var(--mono);font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ---------- тосты и модалка ---------- */
+#toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:9px;z-index:60;max-width:380px}
+.toast{background:var(--bg2);border:1px solid var(--line2);border-left:3px solid var(--accent);border-radius:10px;
+  padding:11px 16px;font-size:13.5px;box-shadow:0 8px 28px rgba(0,0,0,.4);animation:toastIn .25s var(--ease)}
+.toast.ok{border-left-color:var(--ok)}
+.toast.bad{border-left-color:var(--bad)}
+.toast.out{animation:toastOut .25s var(--ease) forwards}
+@keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
+.modal-back{position:fixed;inset:0;background:rgba(8,9,11,.66);backdrop-filter:blur(3px);display:flex;align-items:center;
+  justify-content:center;z-index:70;animation:pageIn .2s var(--ease)}
+.modal{background:var(--bg1);border:1px solid var(--line2);border-radius:14px;padding:24px 26px;max-width:430px;width:calc(100% - 40px);
+  box-shadow:0 18px 60px rgba(0,0,0,.5)}
+.modal h3{margin:0 0 8px;font-size:18px}
+.modal p{color:var(--muted);font-size:14px;margin:0 0 18px}
+.modal .ma{display:flex;gap:10px;justify-content:flex-end}
+.warn-banner{background:var(--bad-bg);border:1px solid rgba(224,133,133,.35);border-radius:10px;padding:10px 15px;
+  font-size:13.5px;margin-bottom:16px;color:var(--bad)}
+.warn-banner a{color:var(--bad);text-decoration:underline}
+.hint{font-size:12px;color:var(--dim);margin-top:7px}
+/* ---------- теги, выделение и удаление в библиотеке ---------- */
+.tagrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:9px}
+.tagchip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;background:var(--teal-bg);color:var(--teal);
+  border:1px solid rgba(127,212,193,.3);border-radius:999px;padding:2px 9px;transition:all .15s var(--ease)}
+.tagchip button{background:none;border:none;color:inherit;cursor:pointer;padding:0;line-height:1;font-size:13px;opacity:.7;
+  transition:opacity .15s var(--ease)}
+.tagchip button:hover{opacity:1}
+.tag-add-btn{background:none;border:1px dashed var(--line2);border-radius:999px;color:var(--dim);font-size:11.5px;
+  padding:2px 10px;cursor:pointer;transition:all .15s var(--ease)}
+.tag-add-btn:hover{color:var(--teal);border-color:rgba(127,212,193,.5)}
+.tag-input{width:110px;padding:2px 9px;font-size:11.5px;border-radius:999px;background:var(--bg0);
+  border:1px solid rgba(127,212,193,.55);color:var(--text)}
+.tag-input:focus{outline:none;box-shadow:0 0 0 3px rgba(127,212,193,.12)}
+.lib-check{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin-top:2px;flex:none;cursor:pointer;
+  background:var(--bg0);border:2px solid var(--line2);border-radius:6px;position:relative;
+  transition:background .18s var(--ease),border-color .18s var(--ease),box-shadow .18s var(--ease),transform .18s var(--ease)}
+.lib-check:hover{border-color:rgba(226,176,74,.6);transform:scale(1.07)}
+.lib-check:checked{background:linear-gradient(135deg,#e8bc5e,#d99f35);border-color:transparent;
+  box-shadow:0 0 12px rgba(226,176,74,.35)}
+.lib-check::after{content:"";position:absolute;left:5px;top:2px;width:4px;height:9px;
+  border:solid #221a08;border-width:0 2.5px 2.5px 0;transform:rotate(45deg) scale(0);
+  transition:transform .18s var(--ease)}
+.lib-check:checked::after{transform:rotate(45deg) scale(1)}
+.lib-check:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(226,176,74,.22)}
+.card.selected{border-color:rgba(226,176,74,.55);box-shadow:0 0 16px rgba(226,176,74,.1)}
+.card .del-article{background:none;border:none;color:var(--dim);cursor:pointer;padding:4px 6px;
+  border-radius:8px;line-height:0;transition:all .16s var(--ease);flex:none}
+.card .del-article:hover{color:var(--bad);background:var(--bad-bg);transform:scale(1.1)}
+.card .del-article:active{transform:scale(.95)}
+.selbar{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:13px;
+  background:var(--bg2);border:1px solid rgba(226,176,74,.45);border-radius:12px;padding:10px 18px;z-index:40;
+  box-shadow:0 8px 30px rgba(0,0,0,.45),0 0 22px rgba(226,176,74,.09);animation:pageIn .22s var(--ease)}
+.selbar .sc{font-size:13.5px;font-weight:600;white-space:nowrap}
+#lib-tags{margin-bottom:14px}
+#lib-tags .tchip{font-size:12px;padding:4px 12px}
+#lib-tags .tchip .cnt{opacity:.6;margin-left:5px;font-size:10.5px}
+.site-err{background:var(--bad-bg);border:1px solid rgba(224,133,133,.35);border-radius:10px;padding:10px 15px;
+  font-size:13px;color:var(--bad);margin-bottom:14px}
+.site-err ul{margin:4px 0 0;padding-left:18px}
+.probe-out{background:var(--bg0);border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:12px 0;font-size:13px}
+.probe-out pre{font:11.5px/1.6 var(--mono);color:#c9cdd6;overflow-x:auto;margin:8px 0;max-height:220px}
+.probe-out .pk{color:var(--teal);font-family:var(--mono);font-size:12px}
+code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border-radius:8px;padding:8px 11px;
+  font:11.5px/1.6 var(--mono);color:var(--muted);overflow-x:auto;white-space:pre;margin-top:9px}
+@media(max-width:900px){
+  #app{flex-direction:column}
+  #sidebar{width:100%;height:auto;position:static;flex-direction:row;align-items:center;flex-wrap:wrap;gap:10px;padding:12px 14px}
+  nav{flex-direction:row;flex-wrap:wrap}
+  nav button{padding:7px 11px}
+  nav button .nl{display:none}
+  .side-foot{display:none}
+  #main{padding:20px 16px 60px}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <svg width="34" height="34" viewBox="0 0 34 34" fill="none" aria-hidden="true">
+        <path d="M5 8.5c4-2.2 8-2.2 12 0v17c-4-2.2-8-2.2-12 0v-17z" stroke="#e2b04a" stroke-width="1.6" fill="rgba(226,176,74,.09)"/>
+        <path d="M29 8.5c-4-2.2-8-2.2-12 0v17c4-2.2 8-2.2 12 0v-17z" stroke="#e2b04a" stroke-width="1.6" fill="rgba(226,176,74,.09)"/>
+        <path d="M17 3.2l1.1 2.6 2.6 1.1-2.6 1.1L17 10.6l-1.1-2.6-2.6-1.1 2.6-1.1L17 3.2z" fill="#e2b04a"/>
+      </svg>
+      <div><span class="bt">litagent</span><span class="bs">поиск научных статей</span></div>
+    </div>
+    <nav id="nav">
+      <button data-page="search"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nl">Поиск</span></button>
+      <button data-page="library"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20V4H6.5A2.5 2.5 0 004 6.5v13z"/><path d="M4 19.5A2.5 2.5 0 006.5 22H20v-5"/></svg><span class="nl">Библиотека</span></button>
+      <button data-page="runs"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg><span class="nl">Запуски</span></button>
+      <button data-page="presets"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12v18l-6-4.5L6 21V3z"/></svg><span class="nl">Пресеты</span></button>
+      <button data-page="sites"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.7 2.6 4 5.6 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.6-4-9s1.3-6.4 4-9z"/></svg><span class="nl">Сайты</span></button>
+      <button data-page="config"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2.4"/><circle cx="8" cy="16" r="2.4"/></svg><span class="nl">Конфиг</span></button>
+    </nav>
+    <div class="side-foot">
+      <div class="chip" id="chip-email"><span class="dot"></span><span class="ct">e-mail…</span></div>
+      <div class="chip" id="chip-llm"><span class="dot"></span><span class="ct">LLM…</span></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <!-- ================= ПОИСК ================= -->
+    <section class="page" id="page-search">
+      <header><h1>Поиск</h1><p class="sub">Ручной режим — запросы задаёте вы. Авто — цель на естественном языке, план строит LLM.</p></header>
+      <div id="search-warn"></div>
+      <div class="seg" id="mode-seg"><div class="pill"></div>
+        <button data-mode="manual" class="active">Ручной</button><button data-mode="auto">Авто (LLM)</button>
+      </div>
+
+      <div id="form-manual">
+        <div class="panel">
+          <div class="field">
+            <span class="fname">Темы — по одной на строку</span>
+            <textarea id="m-topics" rows="3" placeholder="graph neural networks; drug discovery | drug design; -review"></textarea>
+            <span class="fhelp">Мини-язык: «;» или «,» — И, «|» — ИЛИ внутри группы, «-слово» — исключить. Многословные термины становятся фразами.</span>
+          </div>
+          <div class="grid g2" style="margin-top:13px">
+            <div class="field"><span class="fname">Пресет</span><select id="m-preset"><option value="">— без пресета —</option></select>
+              <span class="fhelp">Параметры пресета дополняются полями формы.</span></div>
+            <div class="field"><span class="fname">Сохранить как пресет (необязательно)</span>
+              <div style="display:flex;gap:8px"><input type="text" id="m-save-name" placeholder="имя" style="flex:1"><input type="text" id="m-save-desc" placeholder="описание" style="flex:2"></div>
+            </div>
+          </div>
+          <h3>Источники</h3>
+          <div class="chips" id="m-sources"></div>
+          <p class="hint">Ничего не выбрано — берутся источники из конфига (включённые свои сайты подключаются сами).</p>
+          <h3>Параметры</h3>
+          <div class="grid g6">
+            <div class="field"><span class="fname">Год от</span><input type="number" id="m-year-from" placeholder="напр. 2020"></div>
+            <div class="field"><span class="fname">Год до</span><input type="number" id="m-year-to" placeholder="напр. 2026"></div>
+            <div class="field"><span class="fname">Лимит / источник</span><input type="number" id="m-limit" placeholder="из конфига"></div>
+            <div class="field"><span class="fname">Скачать ровно N PDF</span><input type="number" id="m-count" placeholder="--count"></div>
+            <div class="field"><span class="fname">Макс. скачиваний</span><input type="number" id="m-max-downloads" placeholder="из конфига"></div>
+            <div class="field"><span class="fname">Потоков</span><input type="number" id="m-workers" placeholder="10"></div>
+          </div>
+          <h3>Режимы</h3>
+          <div class="chips" id="m-flags">
+            <button class="tchip" data-flag="oa_only">только OA</button>
+            <button class="tchip" data-flag="pdf_only">только с PDF</button>
+            <button class="tchip" data-flag="title_only">только названия</button>
+            <button class="tchip" data-flag="strict">строго все группы</button>
+            <button class="tchip" data-flag="no_download">только найти</button>
+            <button class="tchip" data-flag="no_pmc">без PMC</button>
+            <button class="tchip" data-flag="flat">без папок источников</button>
+            <button class="tchip" data-flag="dry_run">dry-run (без сети)</button>
+          </div>
+          <details class="adv"><summary>Дополнительно: категории arXiv, группы, исключения, сырые запросы</summary>
+            <div class="grid g2" style="margin-top:12px">
+              <div class="field"><span class="fname">Категории arXiv</span><input type="text" id="m-arxiv-cats" placeholder="cs.CL, cs.LG"></div>
+              <div class="field"><span class="fname">Доп. OR-группы (по одной на строку)</span><textarea id="m-group" rows="2" placeholder="gnn|graph neural network"></textarea></div>
+              <div class="field"><span class="fname">Исключить (по одному термину на строку)</span><textarea id="m-exclude" rows="2" placeholder="survey&#10;editorial"></textarea></div>
+              <div class="field"><span class="fname">Сырые запросы: ИСТОЧНИК=ЗАПРОС (по одному на строку)</span><textarea id="m-raw" rows="2" placeholder='pubmed="asthma"[mh] AND child[tiab]'></textarea></div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div id="form-auto" style="display:none">
+        <div class="panel">
+          <div class="field">
+            <span class="fname">Цель обычным языком</span>
+            <textarea id="a-goal" rows="3" placeholder="Найти свежие статьи про CRISPR при серповидноклеточной анемии, только открытый доступ"></textarea>
+            <span class="fhelp">LLM построит запрос по цели и заметкам из конфига, при необходимости уточнит план по результатам.</span>
+          </div>
+          <div id="a-notes" class="hint"></div>
+          <h3>Источники</h3>
+          <div class="chips" id="a-sources"></div>
+          <p class="hint">Ничего не выбрано — все доступные из конфига; модель выберет сама.</p>
+          <h3>Параметры</h3>
+          <div class="grid g6">
+            <div class="field"><span class="fname">Год от</span><input type="number" id="a-year-from"></div>
+            <div class="field"><span class="fname">Год до</span><input type="number" id="a-year-to"></div>
+            <div class="field"><span class="fname">Лимит / источник</span><input type="number" id="a-limit" placeholder="из конфига"></div>
+            <div class="field"><span class="fname">Скачать ровно N PDF</span><input type="number" id="a-count"></div>
+            <div class="field"><span class="fname">Макс. скачиваний</span><input type="number" id="a-max-downloads" placeholder="из конфига"></div>
+            <div class="field"><span class="fname">Раундов уточнения</span><input type="number" id="a-rounds" placeholder="2"></div>
+          </div>
+          <div class="grid g3" style="margin-top:13px">
+            <div class="field"><span class="fname">Мин. результатов (не уточнять дальше)</span><input type="number" id="a-min-results" placeholder="10"></div>
+            <div class="field"><span class="fname">Порог релевантности LLM (0–10)</span><input type="number" id="a-min-score" step="0.5" placeholder="6"></div>
+            <div class="field"><span class="fname">Потоков скачивания</span><input type="number" id="a-workers" placeholder="10"></div>
+          </div>
+          <h3>Режимы</h3>
+          <div class="chips" id="a-flags">
+            <button class="tchip" data-flag="oa_only">только OA</button>
+            <button class="tchip" data-flag="pdf_only">только с PDF</button>
+            <button class="tchip" data-flag="title_only">только названия</button>
+            <button class="tchip" data-flag="strict">строго все группы</button>
+            <button class="tchip" data-flag="no_download">только найти</button>
+            <button class="tchip" data-flag="llm_filter">фильтр релевантности LLM</button>
+            <button class="tchip" data-flag="no_llm">без LLM (эвристика)</button>
+            <button class="tchip" data-flag="dry_run">dry-run (план без поиска)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="launch">
+        <button class="btn primary" id="btn-search">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          Искать</button>
+        <button class="btn" id="btn-check">Проверить источники и LLM</button>
+      </div>
+
+      <div class="panel" id="job" style="display:none;margin-top:18px">
+        <div class="job-head">
+          <span class="badge manual" id="job-kind">manual</span>
+          <span class="jt" id="job-title"></span>
+          <span class="badge running" id="job-state">идёт</span>
+          <span class="num" id="job-elapsed" style="color:var(--muted);font-size:12.5px"></span>
+          <button class="btn small danger" id="btn-cancel">Отменить</button>
+        </div>
+        <pre id="console"></pre>
+        <div class="progress" id="job-progress"><div class="bar"></div></div>
+        <div id="job-result"></div>
+      </div>
+    </section>
+
+    <!-- ================= БИБЛИОТЕКА ================= -->
+    <section class="page" id="page-library">
+      <header><h1>Библиотека</h1><p class="sub" id="lib-root"></p></header>
+      <div class="stat-chips" id="lib-stats"></div>
+      <div class="toolbar" style="margin-bottom:16px">
+        <button class="btn small" id="lib-clear-cache">Очистить HTTP-кэш</button>
+        <span class="hint" style="margin:0">кэш ответов источников (.http_cache) — после очистки повторные запросы снова идут в сеть; статьи и запуски не трогаются</span>
+      </div>
+      <div class="toolbar">
+        <input type="text" id="lib-q" placeholder="Фильтр: название, автор, DOI, тег…">
+        <select id="lib-source"><option value="">все источники</option></select>
+        <label class="hint" style="display:flex;align-items:center;gap:7px;margin:0;cursor:pointer;font-size:13px">
+          <input type="checkbox" id="lib-sel-all" class="lib-check" style="margin-top:0"> выбрать все</label>
+        <span class="hint" id="lib-count" style="margin:0"></span>
+      </div>
+      <div class="chips" id="lib-tags"></div>
+      <div class="cards" id="lib-list"></div>
+      <div style="text-align:center;margin-top:16px"><button class="btn" id="lib-more" style="display:none">Показать ещё</button></div>
+      <div class="selbar" id="lib-selbar" style="display:none">
+        <span class="sc" id="lib-selcount"></span>
+        <button class="btn small danger" id="lib-del-sel">Удалить выбранные</button>
+        <button class="btn small ghost" id="lib-sel-clear">Снять выделение</button>
+      </div>
+    </section>
+
+    <!-- ================= ЗАПУСКИ ================= -->
+    <section class="page" id="page-runs">
+      <header><h1>Запуски</h1><p class="sub">Отчёты из runs/: запросы, ошибки, статистика и все найденные записи.</p></header>
+      <div class="toolbar" id="runs-toolbar" style="display:none">
+        <button class="btn small danger" id="runs-clear-all">Удалить все запуски</button>
+        <span class="hint" style="margin:0">удаляются только отчёты — статьи и индекс не затрагиваются</span>
+      </div>
+      <div id="runs-list"></div>
+      <div id="run-detail" style="display:none">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn small ghost" id="run-back">← ко всем запускам</button>
+          <button class="btn small danger" id="run-delete">Удалить этот запуск</button>
+        </div>
+        <div id="run-body" style="margin-top:14px"></div>
+      </div>
+    </section>
+
+    <!-- ================= ПРЕСЕТЫ ================= -->
+    <section class="page" id="page-presets">
+      <header><h1>Пресеты</h1><p class="sub" id="presets-file"></p></header>
+      <div class="cards" id="presets-list"></div>
+    </section>
+
+    <!-- ================= САЙТЫ ================= -->
+    <section class="page" id="page-sites">
+      <header><h1>Сайты</h1><p class="sub">Встроенные источники и свои сайты из custom_sites.json.</p></header>
+      <div id="sites-error"></div>
+      <div class="panel"><h2>Встроенные</h2><div class="chips" id="sites-builtin"></div>
+        <details class="adv"><summary>Недоступные агенту (политика)</summary><div id="sites-forbidden" style="margin-top:10px"></div></details>
+      </div>
+      <div class="panel">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><h2 style="flex:1;margin:0">Свои сайты</h2>
+          <button class="btn primary small" id="site-add-open">+ Добавить сайт</button></div>
+        <div id="sites-custom" style="margin-top:14px"></div>
+        <p class="hint">Подходят только официальные API, которые отдают JSON по GET. HTML-выдачу агент не разбирает.
+          Консольный опросник тоже на месте: <code style="font-family:var(--mono)">python -m litagent sites add</code>.</p>
+      </div>
+
+      <div class="panel" id="site-form-panel" style="display:none">
+        <h2>Новый сайт для поиска</h2>
+        <div id="site-form-err"></div>
+        <form id="site-form" autocomplete="off">
+          <h3>Основное</h3>
+          <div class="grid g2">
+            <label class="field"><span class="fname">Короткое имя (для --sources) *</span><input type="text" name="name" placeholder="mysite" required>
+              <span class="fhelp">латиница в нижнем регистре, цифры и _, начинается с буквы</span></label>
+            <label class="field"><span class="fname">Название для людей</span><input type="text" name="title" placeholder="My Science Base"></label>
+            <label class="field"><span class="fname">Адрес поискового API *</span><input type="text" name="search_url" placeholder="https://api.example.org/v1/search" required>
+              <span class="fhelp">https (http — только localhost); адрес проверяется политикой</span></label>
+            <label class="field"><span class="fname">Параметр с поисковой строкой *</span><input type="text" name="query_param" value="q" required></label>
+          </div>
+          <label class="field" style="margin-top:12px"><span class="fname">Что это за база и для каких тем (прочитает нейросеть) *</span>
+            <textarea name="about" rows="2" required placeholder="Открытая база препринтов по биомедицине; поиск по названиям и аннотациям"></textarea></label>
+          <label class="field" style="margin-top:12px"><span class="fname">Постоянные параметры</span>
+            <input type="text" name="static_params" placeholder="format=json&amp;lang=en">
+            <span class="fhelp">вид имя=значение, через &amp; или запятую</span></label>
+
+          <h3>Синтаксис запроса</h3>
+          <div class="grid g4">
+            <label class="field"><span class="fname">Как сайт понимает запрос</span>
+              <select name="query_style"><option value="boolean">булевы операторы</option><option value="plain">просто слова</option></select></label>
+            <label class="field"><span class="fname">Оператор «И»</span><input type="text" name="op_and" value=" AND "></label>
+            <label class="field"><span class="fname">Оператор «ИЛИ»</span><input type="text" name="op_or" value=" OR "></label>
+            <label class="field"><span class="fname">Оператор «НЕ»</span><input type="text" name="op_not" value=" NOT "></label>
+          </div>
+          <div class="grid g2" style="margin-top:12px">
+            <label class="field"><span class="fname">Обёртка запроса (шаблон с {query})</span><input type="text" name="query_template" value="{query}">
+              <span class="fhelp">например title:({query})</span></label>
+            <div class="togglerow" style="border:none"><div><div class="tl">Кавычки для фраз</div><div class="td">многословные термины в "…"</div></div>
+              <label class="switch"><input type="checkbox" name="quote_phrases" checked><span class="track"></span></label></div>
+          </div>
+
+          <h3>Фильтры и страницы</h3>
+          <div class="grid g4">
+            <label class="field"><span class="fname">Параметр «год от»</span><input type="text" name="year_from_param" placeholder="пусто — фильтр локально"></label>
+            <label class="field"><span class="fname">Формат «год от»</span><input type="text" name="year_from_fmt" value="{year}"></label>
+            <label class="field"><span class="fname">Параметр «год до»</span><input type="text" name="year_to_param"></label>
+            <label class="field"><span class="fname">Формат «год до»</span><input type="text" name="year_to_fmt" value="{year}"></label>
+            <label class="field"><span class="fname">Параметр «только OA»</span><input type="text" name="oa_param"></label>
+            <label class="field"><span class="fname">Значение OA</span><input type="text" name="oa_value" value="true"></label>
+            <label class="field"><span class="fname">Параметр лимита</span><input type="text" name="limit_param" placeholder="limit / per_page / size"></label>
+            <label class="field"><span class="fname">Макс. записей за запрос</span><input type="number" name="max_per_request" value="100"></label>
+            <label class="field"><span class="fname">Страницы</span>
+              <select name="pagination"><option value="none">один запрос</option><option value="page">номер страницы</option><option value="offset">смещение</option></select></label>
+            <label class="field"><span class="fname">Параметр страницы</span><input type="text" name="page_param" placeholder="page / offset"></label>
+            <label class="field"><span class="fname">Старт страниц</span><input type="number" name="page_start" value="1"></label>
+            <label class="field"><span class="fname">Пауза между запросами, с</span><input type="number" step="0.1" name="min_interval" value="1"></label>
+          </div>
+
+          <h3>API-ключ (если нужен)</h3>
+          <div class="grid g4">
+            <label class="field"><span class="fname">Переменная окружения с ключом</span><input type="text" name="key_env" placeholder="MYSITE_API_KEY">
+              <span class="fhelp">сам ключ в файл не пишется</span></label>
+            <label class="field"><span class="fname">Параметр для ключа</span><input type="text" name="key_param" placeholder="api_key"></label>
+            <label class="field"><span class="fname">Заголовок для ключа</span><input type="text" name="key_header" placeholder="Authorization"></label>
+            <label class="field"><span class="fname">Префикс значения</span><input type="text" name="key_prefix" placeholder="Bearer "></label>
+          </div>
+
+          <h3>Разбор ответа</h3>
+          <div class="launch" style="margin-bottom:4px">
+            <button type="button" class="btn small" id="site-probe">Пробный запрос и подсказки путей</button>
+            <button type="button" class="btn small" id="site-test">Проверить разбор записей</button>
+          </div>
+          <div id="site-probe-out"></div>
+          <div id="site-test-out"></div>
+          <div class="grid g2">
+            <label class="field"><span class="fname">Путь к списку статей</span><input type="text" name="results_path" placeholder="results / data.items / пусто — весь ответ">
+              <span class="fhelp">через точку; [] — у каждого элемента списка (authors[].name)</span></label>
+            <label class="field"><span class="fname">Путь к общему числу найденных</span><input type="text" name="total_path" placeholder="meta.count"></label>
+          </div>
+          <div class="grid g4" style="margin-top:12px">
+            <label class="field"><span class="fname">Название статьи *</span><input type="text" name="fields.title" placeholder="title"></label>
+            <label class="field"><span class="fname">Авторы</span><input type="text" name="fields.authors" placeholder="authors[].name"></label>
+            <label class="field"><span class="fname">Год / дата</span><input type="text" name="fields.year" placeholder="publication_year"></label>
+            <label class="field"><span class="fname">DOI</span><input type="text" name="fields.doi" placeholder="doi"></label>
+            <label class="field"><span class="fname">Аннотация</span><input type="text" name="fields.abstract" placeholder="abstract"></label>
+            <label class="field"><span class="fname">Ссылка на PDF</span><input type="text" name="fields.pdf_url" placeholder="pdf_url"></label>
+            <label class="field"><span class="fname">Страница статьи</span><input type="text" name="fields.url" placeholder="url"></label>
+            <label class="field"><span class="fname">Журнал</span><input type="text" name="fields.venue" placeholder="journal.title"></label>
+            <label class="field"><span class="fname">Признак OA</span><input type="text" name="fields.is_oa" placeholder="is_oa"></label>
+            <label class="field"><span class="fname">Цитирования</span><input type="text" name="fields.cited_by" placeholder="cited_by_count"></label>
+          </div>
+
+          <h3>Пометки и режим</h3>
+          <label class="field"><span class="fname">Особенности для нейросети: синтаксис, лимиты, подводные камни</span>
+            <textarea name="notes" rows="2"></textarea></label>
+          <div class="togglerow"><div><div class="tl">Использовать автоматически</div><div class="td">во всех запусках; иначе — только через --sources</div></div>
+            <label class="switch"><input type="checkbox" name="enabled" checked><span class="track"></span></label></div>
+
+          <div class="launch" style="margin-top:14px">
+            <button type="submit" class="btn primary" id="site-save">Сохранить сайт</button>
+            <button type="button" class="btn" id="site-form-cancel">Отмена</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ================= КОНФИГ ================= -->
+    <section class="page" id="page-config">
+      <header><h1>Конфиг</h1><p class="sub">litagent.toml — почта, ключи, LLM, скачивание и веб-интерфейс.</p></header>
+      <form id="cfg-form" autocomplete="off">
+        <div class="panel">
+          <h2>Основное</h2>
+          <div class="grid g2">
+            <label class="field" data-field="email"><span class="fname">Контактный e-mail</span><input type="email" name="email" placeholder="you@real.org">
+              <span class="fhelp">Обязателен для реальных запросов: User-Agent, Crossref mailto, Unpaywall, NCBI.</span><span class="ferr"></span></label>
+            <label class="field" data-field="out"><span class="fname">Папка библиотеки</span><input type="text" name="out">
+              <span class="fhelp">pdf/, xml/, index.json, runs/</span><span class="ferr"></span></label>
+          </div>
+          <h3>Источники по умолчанию</h3>
+          <div class="chips" id="cfg-sources"></div><span class="ferr" id="cfg-sources-err" style="display:none"></span>
+          <h3>Поиск и скачивание</h3>
+          <div class="grid g4">
+            <label class="field" data-field="limit_per_source"><span class="fname">Лимит на источник</span><input type="number" name="limit_per_source"><span class="ferr"></span></label>
+            <label class="field" data-field="max_downloads"><span class="fname">Макс. скачиваний</span><input type="number" name="max_downloads"><span class="ferr"></span></label>
+            <label class="field" data-field="download_workers"><span class="fname">Потоков скачивания</span><input type="number" name="download_workers"><span class="ferr"></span></label>
+            <label class="field" data-field="download_timeout"><span class="fname">Таймаут файла, с</span><input type="number" name="download_timeout"><span class="ferr"></span></label>
+            <label class="field" data-field="download_retries"><span class="fname">Попыток на файл</span><input type="number" name="download_retries"><span class="ferr"></span></label>
+            <label class="field" data-field="cache_ttl"><span class="fname">HTTP-кэш, с</span><input type="number" name="cache_ttl"><span class="ferr"></span></label>
+            <label class="field" data-field="deepen_rounds"><span class="fname">Раундов углубления (--count)</span><input type="number" name="deepen_rounds"><span class="ferr"></span></label>
+            <label class="field" data-field="deepen_limit_cap"><span class="fname">Потолок лимита при углублении</span><input type="number" name="deepen_limit_cap"><span class="ferr"></span></label>
+          </div>
+          <div style="margin-top:12px">
+            <div class="togglerow"><div><div class="tl">Только статьи с PDF</div><div class="td">pdf_only — как --pdf-only, проверка скачиванием</div></div>
+              <label class="switch"><input type="checkbox" name="pdf_only"><span class="track"></span></label></div>
+            <div class="togglerow"><div><div class="tl">PubMed ищет и в PMC</div><div class="td">pubmed_pmc — OA-PDF через официальный OA Web Service</div></div>
+              <label class="switch"><input type="checkbox" name="pubmed_pmc"><span class="track"></span></label></div>
+            <div class="togglerow"><div><div class="tl">Папки источников</div><div class="td">folders_by_source — pdf/&lt;источник&gt;/</div></div>
+              <label class="switch"><input type="checkbox" name="folders_by_source"><span class="track"></span></label></div>
+          </div>
+          <div class="grid g2" style="margin-top:12px">
+            <label class="field" data-field="custom_sites"><span class="fname">Файл своих сайтов</span><input type="text" name="custom_sites"><span class="ferr"></span></label>
+            <label class="field" data-field="presets_file"><span class="fname">Файл пресетов</span><input type="text" name="presets_file"><span class="ferr"></span></label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Ключи API</h2>
+          <p class="hint" style="margin:0 0 12px">Все бесплатные. OpenAlex и CORE без ключа пропускаются. Переменные окружения перекрывают файл.</p>
+          <div class="grid g2">
+            <label class="field" data-field="keys.ncbi"><span class="fname">NCBI (PubMed)</span><span class="pw-wrap"><input type="password" name="keys.ncbi"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="fhelp">10 запросов/с вместо 3</span><span class="ferr"></span></label>
+            <label class="field" data-field="keys.openalex"><span class="fname">OpenAlex</span><span class="pw-wrap"><input type="password" name="keys.openalex"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="fhelp">обязателен для OpenAlex</span><span class="ferr"></span></label>
+            <label class="field" data-field="keys.s2"><span class="fname">Semantic Scholar</span><span class="pw-wrap"><input type="password" name="keys.s2"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="fhelp">без ключа часто 429</span><span class="ferr"></span></label>
+            <label class="field" data-field="keys.core"><span class="fname">CORE</span><span class="pw-wrap"><input type="password" name="keys.core"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="fhelp">обязателен для CORE</span><span class="ferr"></span></label>
+            <label class="field" data-field="keys.gigachat_client_id"><span class="fname">GigaChat Client ID</span><span class="pw-wrap"><input type="password" name="keys.gigachat_client_id"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="fhelp">из кабинета Sber Studio</span><span class="ferr"></span></label>
+            <label class="field" data-field="keys.gigachat_client_secret"><span class="fname">GigaChat Client Secret</span><span class="pw-wrap"><input type="password" name="keys.gigachat_client_secret"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="fhelp">Base64-ключ агент соберёт сам</span><span class="ferr"></span></label>
+            <label class="field" data-field="keys.gigachat"><span class="fname">GigaChat: готовый ключ (запасной)</span><span class="pw-wrap"><input type="password" name="keys.gigachat"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="fhelp">или переменная GIGACHAT_CREDENTIALS</span><span class="ferr"></span></label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>LLM для авто-режима</h2>
+          <div class="grid g3">
+            <label class="field" data-field="llm.provider"><span class="fname">Провайдер</span>
+              <select name="llm.provider"><option value="ollama">ollama (локально)</option><option value="openai">openai-совместимый</option><option value="gigachat">gigachat (облако Сбера)</option></select><span class="ferr"></span></label>
+            <label class="field" data-field="llm.model"><span class="fname">Модель</span><input type="text" name="llm.model" placeholder="gemma4 / GigaChat-3-Lightning"><span class="ferr"></span></label>
+            <label class="field" data-field="llm.base_url"><span class="fname">Адрес API</span><input type="text" name="llm.base_url" placeholder="пусто = по умолчанию"><span class="ferr"></span></label>
+            <label class="field" data-field="llm.temperature"><span class="fname">Температура</span><input type="number" step="0.1" name="llm.temperature"><span class="ferr"></span></label>
+            <label class="field" data-field="llm.timeout"><span class="fname">Таймаут, с</span><input type="number" name="llm.timeout"><span class="ferr"></span></label>
+            <label class="field" data-field="llm.num_ctx"><span class="fname">Контекст (Ollama)</span><input type="number" name="llm.num_ctx"><span class="ferr"></span></label>
+            <label class="field" data-field="llm.api_key"><span class="fname">API-ключ (openai-совместимый)</span><span class="pw-wrap"><input type="password" name="llm.api_key"><button type="button" class="pw-eye" aria-label="показать">👁</button></span><span class="ferr"></span></label>
+            <label class="field" data-field="llm.scope"><span class="fname">GigaChat scope</span>
+              <select name="llm.scope"><option>GIGACHAT_API_PERS</option><option>GIGACHAT_API_CORP</option><option>GIGACHAT_API_B2B</option></select><span class="ferr"></span></label>
+            <label class="field" data-field="llm.ca_bundle"><span class="fname">Сертификат Минцифры (PEM)</span><input type="text" name="llm.ca_bundle" placeholder="certs/russian_trusted_root_ca_pem.crt"><span class="ferr"></span></label>
+            <label class="field" data-field="llm.oauth_url"><span class="fname">GigaChat OAuth URL</span><input type="text" name="llm.oauth_url" placeholder="пусто = по умолчанию"><span class="ferr"></span></label>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Авто-режим</h2>
+          <div class="grid g4">
+            <label class="field" data-field="auto.rounds"><span class="fname">Раундов уточнения</span><input type="number" name="auto.rounds"><span class="ferr"></span></label>
+            <label class="field" data-field="auto.min_results"><span class="fname">Мин. результатов</span><input type="number" name="auto.min_results"><span class="ferr"></span></label>
+            <label class="field" data-field="auto.min_score"><span class="fname">Порог релевантности</span><input type="number" step="0.5" name="auto.min_score"><span class="ferr"></span></label>
+            <div class="togglerow" style="border:none"><div><div class="tl">Фильтр LLM</div><div class="td">llm_filter</div></div>
+              <label class="switch"><input type="checkbox" name="auto.llm_filter"><span class="track"></span></label></div>
+          </div>
+          <label class="field" data-field="auto.notes" style="margin-top:12px"><span class="fname">Файлы заметок — по одному на строку</span>
+            <textarea name="auto.notes" rows="2" placeholder="literature_search_systems.tex"></textarea>
+            <span class="fhelp">.tex с аналитикой источников или .md/.txt со своими пометками — уходят в промпт модели.</span><span class="ferr"></span></label>
+        </div>
+
+        <div class="panel">
+          <h2>Веб-интерфейс</h2>
+          <div class="grid g3">
+            <label class="field" data-field="web.host"><span class="fname">Адрес</span><input type="text" name="web.host"><span class="fhelp">127.0.0.1 — только этот компьютер</span><span class="ferr"></span></label>
+            <label class="field" data-field="web.port"><span class="fname">Порт</span><input type="number" name="web.port"><span class="ferr"></span></label>
+            <div class="togglerow" style="border:none"><div><div class="tl">Открывать браузер</div><div class="td">при запуске litagent web</div></div>
+              <label class="switch"><input type="checkbox" name="web.open_browser"><span class="track"></span></label></div>
+          </div>
+          <p class="hint">Изменения адреса и порта применяются после перезапуска сервера.</p>
+        </div>
+
+        <div class="cfg-actions">
+          <button class="btn primary" type="submit" id="btn-cfg-save">Сохранить конфиг</button>
+          <span id="cfg-path"></span>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+<div id="toasts"></div>
+<div class="modal-back" id="modal" style="display:none">
+  <div class="modal"><h3 id="modal-title"></h3><p id="modal-text"></p>
+    <div class="ma"><button class="btn" id="modal-no">Отмена</button><button class="btn danger" id="modal-yes">Да</button></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let S=null, CFG=null, curJob=null, jobSince=0, jobTimer=null, jobStart=null;
+let libData=null, libShown=60, libSel=new Set(), libTagSel=new Set(), tagInputPk=null;
+
+async function api(path,opts={}){
+  const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
+  let data=null; try{data=await r.json();}catch(e){}
+  if(!r.ok){const e=data&&data.error;const err=new Error(typeof e==="string"?e:"Ошибка запроса");err.detail=e;err.status=r.status;throw err;}
+  return data;
+}
+function toast(msg,kind="ok"){
+  const t=document.createElement("div");t.className="toast "+kind;t.textContent=msg;$("#toasts").append(t);
+  setTimeout(()=>{t.classList.add("out");setTimeout(()=>t.remove(),260);},4200);
+}
+function confirmBox(title,text){
+  return new Promise(res=>{
+    $("#modal-title").textContent=title;$("#modal-text").textContent=text;$("#modal").style.display="flex";
+    const done=v=>{$("#modal").style.display="none";$("#modal-yes").onclick=$("#modal-no").onclick=null;res(v);};
+    $("#modal-yes").onclick=()=>done(true);$("#modal-no").onclick=()=>done(false);
+  });
+}
+const fmtRunId=id=>{const m=/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(id||"");return m?`${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}:${m[6]}`:id;};
+const mb=n=>(n/1048576).toFixed(1)+" МБ";
+const fileHref=f=>"/files/"+String(f).split("/").map(encodeURIComponent).join("/");
+const TRASH_SVG='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
+
+/* ---------- навигация ---------- */
+const loaders={search:loadSearch,library:loadLibrary,runs:loadRuns,presets:loadPresets,sites:loadSites,config:loadConfig};
+function showPage(name){
+  if(!loaders[name])name="search";
+  $$(".page").forEach(p=>p.classList.toggle("active",p.id==="page-"+name));
+  $$("#nav button").forEach(b=>b.classList.toggle("active",b.dataset.page===name));
+  if(location.hash!=="#"+name)history.replaceState(null,"","#"+name);
+  loaders[name]().catch(e=>toast(e.message,"bad"));
+}
+$("#nav").addEventListener("click",e=>{const b=e.target.closest("button[data-page]");if(b)showPage(b.dataset.page);});
+window.addEventListener("hashchange",()=>showPage(location.hash.slice(1)));
+
+/* ---------- общее состояние ---------- */
+async function refreshState(){S=await api("/api/state");renderSidebar();}
+function renderSidebar(){
+  const em=$("#chip-email");em.className="chip "+(S.email?"on":"off");
+  em.querySelector(".ct").textContent=S.email||"e-mail не задан";
+  const ll=$("#chip-llm");ll.className="chip on";
+  ll.querySelector(".ct").textContent=`LLM: ${S.llm.provider} · ${S.llm.model}`;
+}
+function sourceChips(container,selected){
+  const c=$(container);c.innerHTML="";
+  const all=[...S.sources.builtin.map(n=>({name:n})),...S.sources.custom];
+  for(const s of all){
+    const b=document.createElement("button");b.type="button";b.className="tchip"+(selected.includes(s.name)?" on":"");
+    b.dataset.src=s.name;
+    b.innerHTML=esc(s.name)+(s.title?`<span class="mark">${esc(s.title)}</span>`:"")+(s.enabled===false?'<span class="mark">выкл</span>':"");
+    b.onclick=()=>b.classList.toggle("on");
+    c.append(b);
+  }
+}
+const chipSelection=container=>$$(container+" .tchip.on").map(b=>b.dataset.src);
+function flagPayload(container){
+  const o={};$$(container+" .tchip").forEach(b=>{if(b.classList.contains("on"))o[b.dataset.flag]=true;});return o;
+}
+function numVal(id){const v=$(id).value.trim();return v===""?null:Number(v);}
+function lines(id){return $(id).value.split("\n").map(s=>s.trim()).filter(Boolean);}
+
+/* ---------- поиск ---------- */
+let mode="manual";
+$("#mode-seg").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-mode]");if(!b)return;
+  mode=b.dataset.mode;
+  $("#mode-seg").classList.toggle("right",mode==="auto");
+  $$("#mode-seg button").forEach(x=>x.classList.toggle("active",x===b));
+  $("#form-manual").style.display=mode==="manual"?"":"none";
+  $("#form-auto").style.display=mode==="auto"?"":"none";
+});
+$$("#m-flags,#a-flags").forEach(c=>c.addEventListener("click",e=>{
+  const b=e.target.closest(".tchip");if(b)b.classList.toggle("on");
+}));
+async function loadSearch(){
+  await refreshState();
+  $("#search-warn").innerHTML=S.email?"":'<div class="warn-banner">Не задан контактный e-mail — реальные запросы не отправятся. Укажите его в <a href="#config" onclick="showPage(\'config\');return false">конфиге</a>.</div>';
+  sourceChips("#m-sources",S.sources.selected||[]);
+  sourceChips("#a-sources",S.sources.selected||[]);
+  const sel=$("#m-preset"),cur=sel.value;
+  sel.innerHTML='<option value="">— без пресета —</option>'+S.presets.map(p=>`<option value="${esc(p.name)}">${esc(p.name)}${p.description?" — "+esc(p.description):""}</option>`).join("");
+  sel.value=cur;
+  $("#a-notes").textContent="Заметки для модели: "+((CFG&&CFG.cfg.auto.notes)||[]).join(", ")+" (меняются в конфиге).";
+  if(S.job&&S.job.state==="running"&&curJob!==S.job.id)attachJob(S.job.id);
+}
+function manualPayload(){
+  const raw={};for(const ln of lines("#m-raw")){const i=ln.indexOf("=");if(i>0)raw[ln.slice(0,i).trim()]=ln.slice(i+1).trim();}
+  return {mode:"manual",topics:lines("#m-topics"),preset:$("#m-preset").value,
+    sources:chipSelection("#m-sources"),year_from:numVal("#m-year-from"),year_to:numVal("#m-year-to"),
+    limit:numVal("#m-limit"),count:numVal("#m-count"),max_downloads:numVal("#m-max-downloads"),workers:numVal("#m-workers"),
+    arxiv_cats:$("#m-arxiv-cats").value.split(",").map(s=>s.trim()).filter(Boolean),
+    group:lines("#m-group"),exclude:lines("#m-exclude"),raw,
+    save_preset:$("#m-save-name").value.trim(),preset_desc:$("#m-save-desc").value.trim(),
+    ...flagPayload("#m-flags")};
+}
+function autoPayload(){
+  return {mode:"auto",goal:$("#a-goal").value.trim(),sources:chipSelection("#a-sources"),
+    year_from:numVal("#a-year-from"),year_to:numVal("#a-year-to"),limit:numVal("#a-limit"),
+    count:numVal("#a-count"),max_downloads:numVal("#a-max-downloads"),workers:numVal("#a-workers"),
+    rounds:numVal("#a-rounds"),min_results:numVal("#a-min-results"),min_score:numVal("#a-min-score"),
+    ...flagPayload("#a-flags")};
+}
+$("#btn-search").onclick=async()=>{
+  const p=mode==="manual"?manualPayload():autoPayload();
+  $("#btn-search").disabled=true;
+  try{const r=await api("/api/search",{method:"POST",body:JSON.stringify(p)});attachJob(r.job.id);}
+  catch(e){toast(e.message,"bad");}
+  finally{$("#btn-search").disabled=false;}
+};
+$("#btn-check").onclick=async()=>{
+  $("#btn-check").disabled=true;
+  try{const r=await api("/api/check",{method:"POST",body:"{}"});attachJob(r.job.id);}
+  catch(e){toast(e.message,"bad");}
+  finally{$("#btn-check").disabled=false;}
+};
+function attachJob(id){
+  curJob=id;jobSince=0;jobStart=Date.now();
+  $("#job").style.display="";$("#console").innerHTML="";$("#job-result").innerHTML="";
+  $("#job-progress").style.display="";$("#btn-cancel").style.display="";
+  setJobBadge("running","идёт");
+  $("#job").scrollIntoView({behavior:"smooth",block:"nearest"});
+  pollJob();
+}
+function setJobBadge(state,text){
+  const b=$("#job-state");b.className="badge "+state;b.textContent=text;
+}
+async function pollJob(){
+  if(!curJob)return;
+  let j;
+  try{j=await api(`/api/jobs/${curJob}?since=${jobSince}`);}
+  catch(e){jobTimer=setTimeout(pollJob,1500);return;}
+  const con=$("#console");
+  const nearBottom=con.scrollHeight-con.scrollTop-con.clientHeight<60;
+  if(j.lines.length){
+    const frag=j.lines.map(l=>`<span class="ln">${esc(l)}</span>`).join("\n");
+    con.insertAdjacentHTML("beforeend",(con.childNodes.length?"\n":"")+frag);
+    if(nearBottom)con.scrollTop=con.scrollHeight;
+  }
+  jobSince=j.total;
+  $("#job-title").textContent=j.title;
+  const kb=$("#job-kind");kb.className="badge "+j.kind;kb.textContent=j.kind;
+  const started=j.started?new Date(j.started).getTime():jobStart;
+  const secs=Math.max(0,Math.round((Date.now()-started)/1000));
+  $("#job-elapsed").textContent=secs>=60?`${Math.floor(secs/60)} мин ${secs%60} с`:`${secs} с`;
+  if(j.state==="running"){jobTimer=setTimeout(pollJob,900);return;}
+  $("#job-progress").style.display="none";$("#btn-cancel").style.display="none";
+  const labels={done:["done","готово"],error:["error",`ошибка (код ${j.exit_code})`],cancelled:["cancelled","отменено"]};
+  const [cls,txt]=labels[j.state]||["cancelled",j.state];
+  setJobBadge(cls,txt);
+  if(j.run_id){
+    try{
+      const run=await api("/api/runs/"+j.run_id);
+      renderJobResult(run);
+      toast(`Готово: ${run.meta.total_unique??"?"} записей`+(run.meta.downloads?`, PDF: ${run.meta.downloads.pdf||0}`:""),"ok");
+    }catch(e){}
+  }else if(j.state==="error"){
+    $("#job-result").innerHTML='<p class="hint">Запуск завершился с ошибкой — подробности в консоли выше.</p>';
+  }
+  refreshState().catch(()=>{});
+}
+$("#btn-cancel").onclick=async()=>{
+  if(!curJob)return;
+  try{await api(`/api/jobs/${curJob}/cancel`,{method:"POST",body:"{}"});toast("Отменяю… скачанное сохранится на диске.","ok");}
+  catch(e){toast(e.message,"bad");}
+};
+function renderJobResult(run){
+  const m=run.meta,d=m.downloads||{};
+  let html='<div class="stat-chips" style="margin-top:16px">';
+  html+=`<div class="stat"><b>${m.total_unique??0}</b>уникальных записей</div>`;
+  if(m.downloads){
+    html+=`<div class="stat"><b>${d.pdf||0}</b>PDF скачано</div>`;
+    if(d.exists)html+=`<div class="stat"><b>${d.exists}</b>уже было</div>`;
+    if(d.xml)html+=`<div class="stat"><b>${d.xml}</b>XML</div>`;
+    if(d.no_pdf||d.failed)html+=`<div class="stat"><b>${(d.no_pdf||0)+(d.failed||0)}</b>без PDF / ошибок</div>`;
+  }
+  if(m.target)html+=`<div class="stat"><b>${m.target.reached} из ${m.target.requested}</b>цель по PDF</div>`;
+  html+=`</div><div class="launch" style="margin-bottom:12px"><a class="btn small" href="#runs" onclick="openRun('${esc(run.id)}');return false">Открыть полный отчёт</a></div>`;
+  html+=resultsTable(run.results);
+  $("#job-result").innerHTML=html;
+}
+/* ---------- таблица результатов (общая с запусками) ---------- */
+function statusBadge(st){
+  st=st||"";
+  if(st==="pdf")return '<span class="st ok">PDF</span>';
+  if(st==="exists")return '<span class="st info">уже есть</span>';
+  if(st==="xml")return '<span class="st teal">XML</span>';
+  if(st==="no_pdf")return '<span class="st bad">нет PDF</span>';
+  if(st.startsWith("failed"))return `<span class="st bad" title="${esc(st)}">ошибка</span>`;
+  if(st.startsWith("skip"))return `<span class="st mute" title="${esc(st)}">пропуск</span>`;
+  return '<span class="st mute">—</span>';
+}
+function resultsTable(rows){
+  if(!rows||!rows.length)return '<div class="empty">Записей нет.</div>';
+  let h='<div class="tbl-wrap"><table><thead><tr><th>№</th><th>Статус</th><th>Год</th><th>Статья</th><th>Источники</th><th>Оценка</th><th>Файл</th></tr></thead><tbody>';
+  rows.forEach((r,i)=>{
+    const srcs=String(r.sources||"").split(",").filter(Boolean).map(s=>`<span class="src-tag">${esc(s)}</span>`).join("");
+    const links=[];
+    if(r.doi)links.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">DOI</a>`);
+    if(r.url)links.push(`<a href="${esc(r.url)}" target="_blank" rel="noopener">↗</a>`);
+    h+=`<tr><td class="num">${esc(r.n||i+1)}</td><td>${statusBadge(r.status)}</td><td class="num">${esc(r.year||"")}</td>
+      <td><div class="rt">${esc(r.title)}</div><div class="ra">${esc(r.authors||"")}${links.length?" · "+links.join(" "):""}</div></td>
+      <td>${srcs}</td><td class="num">${r.score?esc(Number(r.score).toFixed(0)):""}</td>
+      <td>${r.file?`<a href="${fileHref(r.file)}" target="_blank" rel="noopener">открыть</a>`:""}</td></tr>`;
+  });
+  return h+"</tbody></table></div>";
+}
+
+/* ---------- библиотека ---------- */
+async function loadLibrary(){
+  libData=await api("/api/library");libShown=60;
+  $("#lib-root").textContent=libData.root;
+  const st=libData.stats;
+  $("#lib-stats").innerHTML=
+    `<div class="stat"><b>${st.pdf}</b>PDF</div><div class="stat"><b>${st.xml}</b>XML</div>
+     <div class="stat"><b>${mb(st.articles_bytes)}</b>статьи</div><div class="stat"><b>${st.indexed}</b>в индексе</div>
+     <div class="stat"><b>${st.runs}</b>запусков</div><div class="stat"><b>${mb(st.cache_bytes)}</b>HTTP-кэш</div>`;
+  const srcs=[...new Set(libData.records.flatMap(r=>r.sources||[]))].sort();
+  const sel=$("#lib-source"),cur=sel.value;
+  sel.innerHTML='<option value="">все источники</option>'+srcs.map(s=>`<option>${esc(s)}</option>`).join("");
+  sel.value=cur;
+  renderTagFilter();
+  renderLibrary();
+}
+function renderTagFilter(){
+  const tags=libData.all_tags||[];
+  [...libTagSel].forEach(t=>{if(!tags.includes(t))libTagSel.delete(t);});
+  const counts={};
+  libData.records.forEach(r=>(r.tags||[]).forEach(t=>counts[t]=(counts[t]||0)+1));
+  const c=$("#lib-tags");
+  c.style.display=tags.length?"":"none";
+  c.innerHTML=tags.map(t=>`<button type="button" class="tchip${libTagSel.has(t)?" on":""}" data-libtag="${esc(t)}">${esc(t)}<span class="cnt">${counts[t]||0}</span></button>`).join("");
+}
+function libFiltered(){
+  const q=$("#lib-q").value.trim().toLowerCase();
+  const src=$("#lib-source").value;
+  return libData.records.filter(r=>{
+    if(src&&!(r.sources||[]).includes(src))return false;
+    if(libTagSel.size&&!(r.tags||[]).some(t=>libTagSel.has(t)))return false;
+    if(!q)return true;
+    return [r.title,(r.authors||[]).join(" "),r.doi,r.pmid,r.arxiv_id,String(r.year||""),(r.tags||[]).join(" ")].join(" ").toLowerCase().includes(q);
+  });
+}
+function renderLibrary(){
+  const rows=libFiltered();
+  $("#lib-count").textContent=`показано ${Math.min(libShown,rows.length)} из ${rows.length}`;
+  $("#lib-more").style.display=rows.length>libShown?"":"none";
+  $("#lib-sel-all").checked=rows.length>0&&rows.every(r=>libSel.has(r.pk));
+  $("#lib-selbar").style.display=libSel.size?"":"none";
+  $("#lib-selcount").textContent=`Выбрано: ${libSel.size}`;
+  if(!rows.length){$("#lib-list").innerHTML='<div class="empty" style="grid-column:1/-1">Пока пусто. Запустите поиск — скачанные статьи появятся здесь.<br><br><code>python -m litagent manual -q "graph neural networks" -n 10</code></div>';return;}
+  $("#lib-list").innerHTML=rows.slice(0,libShown).map(r=>{
+    const sel=libSel.has(r.pk);
+    const srcs=(r.sources||[]).map(s=>`<span class="src-tag">${esc(s)}</span>`).join("");
+    const links=[];
+    if(r.doi)links.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">DOI</a>`);
+    if(r.url)links.push(`<a href="${esc(r.url)}" target="_blank" rel="noopener">страница</a>`);
+    const tags=(r.tags||[]).map(t=>`<span class="tagchip">${esc(t)}<button type="button" data-tag-remove data-pk="${esc(r.pk)}" data-tag="${esc(t)}" title="убрать тег">×</button></span>`).join("");
+    const tagAdd=tagInputPk===r.pk
+      ?`<input class="tag-input" data-pk="${esc(r.pk)}" placeholder="тег…" maxlength="80">`
+      :`<button type="button" class="tag-add-btn" data-tag-add data-pk="${esc(r.pk)}">+ тег</button>`;
+    return `<div class="card${sel?" selected":""}">
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        <input type="checkbox" class="lib-check" data-pk="${esc(r.pk)}" ${sel?"checked":""} title="выбрать для удаления">
+        <div style="flex:1;min-width:0"><div class="ct">${esc(r.title)}</div>
+        <div class="cm">${esc((r.authors||[]).slice(0,3).join(", "))}${r.year?" · "+r.year:""}${r.venue?" · "+esc(r.venue):""}</div></div>
+        <button type="button" class="del-article" data-del-article data-pk="${esc(r.pk)}" title="удалить статью">${TRASH_SVG}</button>
+      </div>
+      <div>${srcs}${r.is_oa?' <span class="st ok">OA</span>':""}${r.score!=null&&r.score!==""?` <span class="st info">оценка ${esc(Number(r.score).toFixed(0))}</span>`:""}</div>
+      ${r.abstract?`<div class="ca">${esc(r.abstract)}</div>`:""}
+      <div class="tagrow">${tags}${tagAdd}</div>
+      <div class="actions">${r.has_file&&r.file?`<a class="btn small primary" href="${fileHref(r.file)}" target="_blank" rel="noopener">${r.file.endsWith(".xml")?"XML":"PDF"}</a>`:'<span class="st mute">файл не скачан</span>'}
+      ${links.join(" ")}</div></div>`;
+  }).join("");
+}
+async function saveTags(pk,tags){
+  try{
+    const r=await api("/api/library/tags",{method:"POST",body:JSON.stringify({pk,tags})});
+    const rec=libData.records.find(x=>x.pk===pk);
+    if(rec)rec.tags=r.tags;
+    libData.all_tags=r.all_tags;
+    renderTagFilter();renderLibrary();
+  }catch(e){toast(e.message,"bad");}
+}
+async function doDelete(pks){
+  if(!pks.length)return;
+  if(!await confirmBox("Удалить из библиотеки?",`Записей к удалению: ${pks.length}. Файлы PDF/XML удалятся с диска, индекс обновится. Это необратимо.`))return;
+  try{
+    const r=await api("/api/library/delete",{method:"POST",body:JSON.stringify({keys:pks})});
+    pks.forEach(k=>libSel.delete(k));
+    toast(`Удалено: ${r.deleted} записей, ${r.files} файлов (${mb(r.bytes)})`+(r.errors.length?` · ошибок: ${r.errors.length}`:""),"ok");
+    await loadLibrary();
+  }catch(e){toast(e.message,"bad");}
+}
+$("#lib-clear-cache").onclick=async()=>{
+  if(!await confirmBox("Очистить HTTP-кэш?","Кэш ответов источников (.http_cache) будет удалён: повторные запросы снова пойдут в сеть. Статьи, индекс и запуски не трогаются."))return;
+  try{
+    const r=await api("/api/cache/clear",{method:"POST",body:"{}"});
+    toast(`Кэш очищен: ${r.files} файлов (${mb(r.bytes)})`+(r.errors.length?` · ошибок: ${r.errors.length}`:""),"ok");
+    await loadLibrary();
+  }catch(e){toast(e.message,"bad");}
+};
+$("#lib-q").addEventListener("input",()=>{libShown=60;renderLibrary();});
+$("#lib-source").addEventListener("change",()=>{libShown=60;renderLibrary();});
+$("#lib-more").onclick=()=>{libShown+=60;renderLibrary();};
+$("#lib-tags").addEventListener("click",e=>{
+  const b=e.target.closest("[data-libtag]");if(!b)return;
+  const t=b.dataset.libtag;
+  libTagSel.has(t)?libTagSel.delete(t):libTagSel.add(t);
+  libShown=60;renderTagFilter();renderLibrary();
+});
+$("#lib-sel-all").addEventListener("change",e=>{
+  libFiltered().forEach(r=>e.target.checked?libSel.add(r.pk):libSel.delete(r.pk));
+  renderLibrary();
+});
+$("#lib-del-sel").onclick=()=>doDelete([...libSel]);
+$("#lib-sel-clear").onclick=()=>{libSel.clear();renderLibrary();};
+$("#lib-list").addEventListener("click",e=>{
+  const rm=e.target.closest("[data-tag-remove]");
+  if(rm){const r=libData.records.find(x=>x.pk===rm.dataset.pk);if(r)saveTags(r.pk,(r.tags||[]).filter(t=>t!==rm.dataset.tag));return;}
+  const add=e.target.closest("[data-tag-add]");
+  if(add){tagInputPk=add.dataset.pk;renderLibrary();const inp=$("#lib-list .tag-input");if(inp)inp.focus();return;}
+  const del=e.target.closest("[data-del-article]");
+  if(del)doDelete([del.dataset.pk]);
+});
+$("#lib-list").addEventListener("change",e=>{
+  const chk=e.target.closest(".lib-check");
+  if(chk){chk.checked?libSel.add(chk.dataset.pk):libSel.delete(chk.dataset.pk);renderLibrary();}
+});
+$("#lib-list").addEventListener("keydown",e=>{
+  if(!e.target.classList.contains("tag-input"))return;
+  if(e.key==="Enter"){
+    e.preventDefault();
+    const pk=e.target.dataset.pk,v=e.target.value.trim();
+    const r=libData.records.find(x=>x.pk===pk);
+    tagInputPk=null;
+    if(v&&r)saveTags(pk,[...(r.tags||[]),v]);else renderLibrary();
+  }else if(e.key==="Escape"){tagInputPk=null;renderLibrary();}
+});
+$("#lib-list").addEventListener("focusout",e=>{
+  if(e.target.classList.contains("tag-input")&&tagInputPk){tagInputPk=null;renderLibrary();}
+});
+
+/* ---------- запуски ---------- */
+let curRunId=null, lastRunIds=[];
+async function loadRuns(){
+  $("#run-detail").style.display="none";$("#runs-list").style.display="";
+  const d=await api("/api/runs");
+  lastRunIds=d.runs.map(r=>r.id);
+  $("#runs-toolbar").style.display=lastRunIds.length?"":"none";
+  if(!d.runs.length){$("#runs-list").innerHTML='<div class="empty">Запусков ещё не было.</div>';return;}
+  $("#runs-list").innerHTML=d.runs.map(r=>{
+    const dl=r.downloads?`PDF ${r.downloads.pdf||0}${r.downloads.exists?` + ${r.downloads.exists} уже есть`:""}`:"без скачивания";
+    const sum=r.goal||(r.topics||[]).filter(Boolean).join("; ")||"—";
+    return `<div class="run-row" data-run="${esc(r.id)}">
+      <span class="badge ${esc(r.mode)}">${esc(r.mode)}</span>
+      <span class="rid">${fmtRunId(r.id)}</span>
+      <span class="rsum">${esc(sum)}</span>
+      <span class="rnum">${r.total_unique??"?"} зап. · ${dl}</span>
+      <button type="button" class="run-del" data-del-run="${esc(r.id)}" title="удалить запуск">${TRASH_SVG}</button></div>`;
+  }).join("");
+  $$("#runs-list .run-row").forEach(el=>el.onclick=()=>openRun(el.dataset.run));
+  $$("#runs-list [data-del-run]").forEach(b=>b.onclick=e=>{e.stopPropagation();deleteRuns([b.dataset.delRun]);});
+}
+async function deleteRuns(ids){
+  ids=ids.filter(Boolean);
+  if(!ids.length)return;
+  if(!await confirmBox("Удалить запуски?",`Отчётов к удалению: ${ids.length}. Файлы runs/ будут удалены с диска. Статьи и индекс не затрагиваются. Это необратимо.`))return;
+  try{
+    const r=await api("/api/runs/delete",{method:"POST",body:JSON.stringify({ids})});
+    toast(`Удалено запусков: ${r.deleted}`+(r.errors.length?` · ошибок: ${r.errors.length}`:""),"ok");
+    await loadRuns();
+  }catch(e){toast(e.message,"bad");}
+}
+$("#run-back").onclick=()=>{$("#run-detail").style.display="none";$("#runs-list").style.display="";};
+$("#runs-clear-all").onclick=()=>deleteRuns(lastRunIds);
+$("#run-delete").onclick=()=>deleteRuns([curRunId]);
+async function openRun(id){
+  showPage("runs");
+  let run;try{run=await api("/api/runs/"+id);}catch(e){toast(e.message,"bad");return;}
+  curRunId=id;
+  $("#runs-list").style.display="none";$("#run-detail").style.display="";
+  const m=run.meta,d=m.downloads||{},http=m.http||{};
+  let h=`<div class="meta-grid">
+    <div class="meta"><div class="mk">Запуск</div><div class="mv">${fmtRunId(id)}</div></div>
+    <div class="meta"><div class="mk">Режим</div><div class="mv">${esc(m.mode||"?")}</div></div>
+    <div class="meta"><div class="mk">Уникальных записей</div><div class="mv">${m.total_unique??0}</div></div>
+    <div class="meta"><div class="mk">HTTP-запросов</div><div class="mv">${http.requests??"?"}${http.retries?` (повторов ${http.retries})`:""}</div></div>`;
+  if(m.downloads)h+=`<div class="meta"><div class="mk">Скачано</div><div class="mv">PDF ${d.pdf||0}${d.exists?` + ${d.exists} уже есть`:""}${d.xml?`, XML ${d.xml}`:""}</div></div>`;
+  if(m.target)h+=`<div class="meta"><div class="mk">Цель по PDF</div><div class="mv">${m.target.reached} из ${m.target.requested}</div></div>`;
+  h+="</div>";
+  if(m.goal)h+=`<div class="panel"><h2>Цель</h2><p style="margin:0">${esc(m.goal)}</p></div>`;
+  if(m.rounds&&m.rounds.length){
+    h+='<div class="panel"><h2>Раунды плана</h2>'+m.rounds.map(r=>
+      `<details class="plan"><summary>Раунд ${esc(r.round)} · ${r.source==="heuristic"?"эвристика":"LLM"}${r.verdict?" · "+esc(r.verdict):""}${r.reason?" — "+esc(r.reason):""}</summary>
+       ${r.rationale?`<p style="color:var(--muted);font-size:13px;margin:8px 0 0">${esc(r.rationale)}</p>`:""}
+       <pre>${esc(JSON.stringify(r.plan,null,2))}</pre></details>`).join("")+"</div>";
+  }
+  const qs=m.queries||[];
+  if(qs.length){
+    h+='<div class="panel"><h2>Запросы к источникам</h2><div class="tbl-wrap"><table><thead><tr><th>Источник</th><th>Запрос</th><th>Найдено / взято / после фильтра</th><th>Примечание</th></tr></thead><tbody>';
+    for(const q of qs){
+      const note=q.error?`<span class="st bad">${esc(q.error)}</span>`:q.skipped?`<span class="st mute">${esc(q.skipped)}</span>`:q.translation?esc(q.translation):"";
+      h+=`<tr><td><span class="src-tag">${esc(q.source)}</span></td><td style="font-family:var(--mono);font-size:12px">${esc(q.spec||"")}</td>
+        <td class="num">${q.found??"—"} / ${q.fetched??"—"} / ${q.kept??"—"}</td><td style="font-size:12.5px">${note}</td></tr>`;
+    }
+    h+="</tbody></table></div></div>";
+  }
+  h+='<div class="panel"><h2>Найденные записи</h2>'+resultsTable(run.results)+"</div>";
+  $("#run-body").innerHTML=h;
+}
+
+/* ---------- пресеты ---------- */
+async function loadPresets(){
+  const d=await api("/api/presets");
+  $("#presets-file").textContent="Файл: "+d.file;
+  if(!d.presets.length){
+    $("#presets-list").innerHTML='<div class="empty" style="grid-column:1/-1">Пресетов нет. Сохраните запрос из формы поиска (поле «Сохранить как пресет») или из консоли:<br><br><code>python -m litagent manual -q "тема" --save-preset имя --dry-run</code></div>';
+    return;
+  }
+  $("#presets-list").innerHTML=d.presets.map(p=>`<div class="card">
+    <div class="ct">${esc(p.name)}</div>
+    <div class="cm">${esc(p.description||"без описания")}${p.saved?" · "+esc(p.saved.slice(0,10)):""}</div>
+    <div>${(p.args.query||[]).map(t=>`<span class="src-tag">${esc(t)}</span>`).join("")||'<span class="st mute">темы из файла</span>'}</div>
+    <code class="cli">${esc(p.cli)}</code>
+    <div class="actions"><button class="btn small primary" data-run-preset="${esc(p.name)}">Запустить</button>
+    <button class="btn small danger" data-del-preset="${esc(p.name)}">Удалить</button></div></div>`).join("");
+  $$("[data-run-preset]").forEach(b=>b.onclick=()=>{
+    showPage("search");
+    if(mode!=="manual")$('#mode-seg button[data-mode="manual"]').click();
+    $("#m-preset").value=b.dataset.runPreset;
+    toast(`Пресет «${b.dataset.runPreset}» выбран — нажмите «Искать».`,"ok");
+  });
+  $$("[data-del-preset]").forEach(b=>b.onclick=async()=>{
+    if(!await confirmBox("Удалить пресет?",`Пресет «${b.dataset.delPreset}» будет удалён из файла.`))return;
+    try{await api("/api/presets/"+encodeURIComponent(b.dataset.delPreset),{method:"DELETE"});toast("Пресет удалён.","ok");loadPresets();}
+    catch(e){toast(e.message,"bad");}
+  });
+}
+
+/* ---------- сайты ---------- */
+async function loadSites(){
+  const d=await api("/api/sites");
+  $("#sites-error").innerHTML=d.error?`<div class="warn-banner">${esc(d.error)}</div>`:"";
+  $("#sites-builtin").innerHTML=d.builtin.map(n=>`<span class="tchip on" style="cursor:default">${esc(n)}</span>`).join("");
+  $("#sites-forbidden").innerHTML=Object.entries(d.forbidden).map(([n,w])=>
+    `<div class="togglerow"><div><div class="tl">${esc(n)}</div><div class="td">${esc(w)}</div></div></div>`).join("")||'<p class="hint">Список пуст.</p>';
+  if(!d.custom.length){
+    $("#sites-custom").innerHTML='<div class="empty">Свои сайты не добавлены.</div>';return;
+  }
+  $("#sites-custom").innerHTML=d.custom.map(s=>`<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0"><div class="ct">${esc(s.name)}${s.valid?"":' <span class="st bad">описание некорректно</span>'}</div>
+      <div class="cm">${esc(s.title||"")} · ${esc(s.host)} · ${s.query_style==="boolean"?"булевы операторы":"простые слова"}${s.key_env?" · ключ: $"+esc(s.key_env):" · без ключа"}${s.origin?" · из "+esc(s.origin):""}</div></div>
+      <label class="switch" title="включать автоматически во все запуски"><input type="checkbox" data-site-toggle="${esc(s.name)}" ${s.enabled?"checked":""}><span class="track"></span></label>
+    </div>
+    ${s.about?`<div class="ca">${esc(s.about)}</div>`:""}
+    ${s.notes?`<div class="ca" style="max-height:3.2em">📝 ${esc(s.notes)}</div>`:""}
+    <div class="actions"><span class="hint" style="margin:0">пауза ${esc(s.min_interval)} с · правка: <code style="font-family:var(--mono)">sites edit ${esc(s.name)}</code></span>
+    <button class="btn small danger" data-del-site="${esc(s.name)}">Удалить</button></div></div>`).join("");
+  $$("[data-site-toggle]").forEach(inp=>inp.onchange=async()=>{
+    try{await api("/api/sites/"+encodeURIComponent(inp.dataset.siteToggle),{method:"POST",body:JSON.stringify({enabled:inp.checked})});
+      toast(`Сайт «${inp.dataset.siteToggle}» ${inp.checked?"включён":"выключен"}.`,"ok");refreshState().catch(()=>{});}
+    catch(e){toast(e.message,"bad");inp.checked=!inp.checked;}
+  });
+  $$("[data-del-site]").forEach(b=>b.onclick=async()=>{
+    if(!await confirmBox("Удалить сайт?",`Сайт «${b.dataset.delSite}» будет удалён из custom_sites.json.`))return;
+    try{await api("/api/sites/"+encodeURIComponent(b.dataset.delSite),{method:"DELETE"});toast("Сайт удалён.","ok");loadSites();refreshState().catch(()=>{});}
+    catch(e){toast(e.message,"bad");}
+  });
+}
+
+/* ---------- форма добавления сайта ---------- */
+function collectSiteForm(){
+  const f=$("#site-form");
+  const val=n=>{const el=f.querySelector(`[name="${n}"]`);return el?(el.type==="checkbox"?el.checked:el.value.trim()):"";};
+  const sp={};
+  for(const part of val("static_params").replace(/,/g,"&").split("&")){
+    const i=part.indexOf("=");
+    if(i>0)sp[part.slice(0,i).trim()]=part.slice(i+1).trim();
+  }
+  const fields={};
+  ["title","authors","year","doi","abstract","pdf_url","url","venue","is_oa","cited_by"].forEach(k=>{
+    const v=val("fields."+k);if(v)fields[k]=v;
+  });
+  const pad=o=>o?" "+o+" ":" ";
+  return {name:val("name").toLowerCase(),title:val("title"),about:val("about"),search_url:val("search_url"),
+    query_param:val("query_param")||"q",static_params:sp,query_style:val("query_style"),
+    op_and:pad(val("op_and")||"AND"),op_or:pad(val("op_or")||"OR"),op_not:pad(val("op_not")||"NOT"),
+    quote_phrases:val("quote_phrases"),query_template:val("query_template")||"{query}",
+    year_from_param:val("year_from_param"),year_from_fmt:val("year_from_fmt")||"{year}",
+    year_to_param:val("year_to_param"),year_to_fmt:val("year_to_fmt")||"{year}",
+    oa_param:val("oa_param"),oa_value:val("oa_value")||"true",
+    pagination:val("pagination"),page_param:val("page_param"),page_start:Number(val("page_start"))||1,
+    limit_param:val("limit_param"),max_per_request:Number(val("max_per_request"))||100,
+    key_env:val("key_env"),key_param:val("key_param"),key_header:val("key_header"),key_prefix:val("key_prefix"),
+    min_interval:Number(val("min_interval"))||1,results_path:val("results_path"),total_path:val("total_path"),
+    fields,notes:val("notes"),enabled:val("enabled")};
+}
+function siteFormError(msg){
+  $("#site-form-err").innerHTML=Array.isArray(msg)
+    ?`<div class="site-err">Исправьте ошибки:<ul>${msg.map(m=>`<li>${esc(m)}</li>`).join("")}</ul></div>`
+    :`<div class="site-err">${esc(msg)}</div>`;
+}
+$("#site-add-open").onclick=()=>{
+  $("#site-form-panel").style.display="";
+  $("#site-form-err").innerHTML="";
+  $("#site-form-panel").scrollIntoView({behavior:"smooth",block:"start"});
+  $('#site-form [name="name"]').focus();
+};
+$("#site-form-cancel").onclick=()=>{$("#site-form-panel").style.display="none";};
+$("#site-probe").onclick=async()=>{
+  const btn=$("#site-probe");btn.disabled=true;
+  $("#site-probe-out").innerHTML='<p class="hint">Делаю пробный запрос «machine learning»…</p>';
+  try{
+    const d=await api("/api/sites/probe",{method:"POST",body:JSON.stringify(collectSiteForm())});
+    let h='<div class="probe-out">';
+    h+=`<div>Верхний уровень ответа: ${d.top.length?d.top.map(k=>`<span class="pk">${esc(k)}</span>`).join(", "):"(список)"}</div>`;
+    if(d.sample)h+=`<details class="plan" style="margin:8px 0"><summary>Пример записи из ответа</summary><pre>${esc(JSON.stringify(d.sample,null,2).slice(0,4000))}</pre></details>`;
+    const sug=[];
+    if(d.results_path)sug.push(["results_path",d.results_path]);
+    if(d.total_path)sug.push(["total_path",d.total_path]);
+    Object.entries(d.fields||{}).forEach(([k,v])=>sug.push(["fields."+k,v]));
+    if(sug.length){
+      h+=`<div style="margin-top:6px">Подсказки: ${sug.map(([n,v])=>`<span class="pk">${esc(n)}=${esc(v)}</span>`).join(" · ")}</div>`;
+      h+='<button type="button" class="btn small" id="site-apply-sug" style="margin-top:9px">Применить подсказки</button>';
+      window._siteSug=sug;
+    }else h+='<div class="hint">Список записей в ответе не найден — укажите пути вручную.</div>';
+    $("#site-probe-out").innerHTML=h+"</div>";
+    const ap=$("#site-apply-sug");
+    if(ap)ap.onclick=()=>{
+      window._siteSug.forEach(([n,v])=>{const el=$("#site-form").querySelector(`[name="${n}"]`);if(el)el.value=v;});
+      toast("Подсказки применены — проверьте поля и сохраните.","ok");
+    };
+  }catch(e){$("#site-probe-out").innerHTML=`<div class="site-err">${esc(e.message)}</div>`;}
+  finally{btn.disabled=false;}
+};
+$("#site-test").onclick=async()=>{
+  const btn=$("#site-test");btn.disabled=true;
+  $("#site-test-out").innerHTML='<p class="hint">Проверяю запрос и разбор полей…</p>';
+  try{
+    const d=await api("/api/sites/test",{method:"POST",body:JSON.stringify(collectSiteForm())});
+    let h='<div class="probe-out">';
+    h+=`<div>Запрос: <span class="pk">${esc(d.query)}</span> · найдено: <b>${d.found??"?"}</b> · взято: ${d.records.length}</div>`;
+    if(d.warnings.length)h+=`<div style="color:var(--bad);margin-top:6px">${d.warnings.map(w=>"⚠ "+esc(w)).join("<br>")}</div>`;
+    h+=d.records.map((r,i)=>`<div style="margin-top:8px"><b>${i+1}. ${esc(r.title)}</b><div class="hint" style="margin:2px 0 0">${esc((r.authors||[]).slice(0,3).join(", "))}${r.year?" · "+r.year:""} · doi: ${esc(r.doi||"—")} · PDF: ${r.pdf_urls&&r.pdf_urls.length?"да":"нет"}</div></div>`).join("");
+    if(!d.records.length)h+='<div class="hint">Записей нет — проверьте путь к списку и поле названия.</div>';
+    $("#site-test-out").innerHTML=h+"</div>";
+  }catch(e){
+    $("#site-test-out").innerHTML=Array.isArray(e.detail)
+      ?`<div class="site-err">Описание некорректно:<ul>${e.detail.map(m=>`<li>${esc(m)}</li>`).join("")}</ul></div>`
+      :`<div class="site-err">${esc(e.message)}</div>`;
+  }finally{btn.disabled=false;}
+};
+$("#site-form").addEventListener("submit",async e=>{
+  e.preventDefault();
+  $("#site-form-err").innerHTML="";
+  const btn=$("#site-save");btn.disabled=true;
+  try{
+    const r=await api("/api/sites",{method:"POST",body:JSON.stringify(collectSiteForm())});
+    toast(`Сайт «${r.site.name}» сохранён${r.site.enabled?" и включён":""}.`,"ok");
+    $("#site-form-panel").style.display="none";
+    $("#site-form").reset();
+    $("#site-probe-out").innerHTML="";$("#site-test-out").innerHTML="";
+    await loadSites();
+    await refreshState();
+  }catch(err){
+    siteFormError(err.detail&&typeof err.detail==="object"?err.detail:err.message);
+    $("#site-form-panel").scrollIntoView({behavior:"smooth",block:"start"});
+  }finally{btn.disabled=false;}
+});
+
+/* ---------- конфиг ---------- */
+function cfgSet(path,val){
+  const el=$(`#cfg-form [name="${path}"]`);if(!el)return;
+  if(el.type==="checkbox")el.checked=!!val;
+  else if(el.tagName==="TEXTAREA"&&Array.isArray(val))el.value=val.join("\n");
+  else el.value=val??"";
+}
+function cfgCollect(){
+  const out={};
+  $$("#cfg-form [name]").forEach(el=>{
+    const path=el.name;let v;
+    if(el.type==="checkbox")v=el.checked;
+    else if(el.tagName==="TEXTAREA"&&path==="auto.notes")v=el.value.split("\n").map(s=>s.trim()).filter(Boolean);
+    else if(el.type==="number")v=el.value.trim()===""?undefined:Number(el.value);
+    else v=el.value;
+    if(v===undefined)return;
+    const parts=path.split(".");let o=out;
+    parts.slice(0,-1).forEach(k=>{o=o[k]=o[k]||{};});
+    o[parts[parts.length-1]]=v;
+  });
+  out.sources=chipSelection("#cfg-sources");
+  return out;
+}
+async function loadConfig(){
+  const d=await api("/api/config");CFG=d;
+  $$("#cfg-form .field").forEach(f=>f.classList.remove("invalid"));
+  $("#cfg-sources-err").style.display="none";
+  const c=d.cfg;
+  for(const k of ["email","out","custom_sites","presets_file","limit_per_source","max_downloads","download_workers",
+    "download_timeout","download_retries","cache_ttl","deepen_rounds","deepen_limit_cap","pdf_only","pubmed_pmc","folders_by_source"])cfgSet(k,c[k]);
+  for(const sec of ["keys","llm","auto","web"])for(const k of Object.keys(c[sec]||{}))cfgSet(`${sec}.${k}`,c[sec][k]);
+  sourceChips("#cfg-sources",c.sources||[]);
+  $$("#cfg-form .env-badge").forEach(b=>b.remove());
+  for(const o of d.env_overrides){
+    const f=$(`#cfg-form [data-field="${o.field}"] .fname`);
+    if(f)f.insertAdjacentHTML("beforeend",`<span class="env-badge" title="Сейчас действует значение из переменной окружения">перекрывается $${esc(o.env)}</span>`);
+  }
+  $("#cfg-path").textContent=d.path+(d.exists?"":"  (файла пока нет — будет создан)");
+}
+$("#cfg-form").addEventListener("submit",async e=>{
+  e.preventDefault();
+  $("#btn-cfg-save").disabled=true;
+  try{
+    const r=await api("/api/config",{method:"POST",body:JSON.stringify(cfgCollect())});
+    toast("Конфиг сохранён: "+r.saved,"ok");
+    CFG={cfg:r.cfg};
+    await refreshState();
+    await loadConfig();
+  }catch(err){
+    if(err.detail&&typeof err.detail==="object"){
+      for(const [field,msg] of Object.entries(err.detail)){
+        if(field==="sources"){const el=$("#cfg-sources-err");el.textContent=msg;el.style.display="block";continue;}
+        const f=$(`#cfg-form [data-field="${field}"]`);
+        if(f){f.classList.add("invalid");f.querySelector(".ferr").textContent=msg;}
+      }
+      toast("Исправьте ошибки в полях.","bad");
+    }else toast(err.message,"bad");
+  }finally{$("#btn-cfg-save").disabled=false;}
+});
+$$(".pw-eye").forEach(b=>b.onclick=()=>{
+  const inp=b.parentElement.querySelector("input");
+  inp.type=inp.type==="password"?"text":"password";
+  b.style.color=inp.type==="text"?"var(--accent)":"";
+});
+
+/* ---------- старт ---------- */
+(async function init(){
+  try{
+    await refreshState();
+    const cfg=await api("/api/config");CFG=cfg;
+    showPage(location.hash.slice(1)||"search");
+    if(S.job&&S.job.state==="running")attachJob(S.job.id);
+  }catch(e){
+    document.body.insertAdjacentHTML("beforeend",'<div class="warn-banner" style="margin:20px">Сервер не отвечает: '+esc(e.message)+"</div>");
+  }
+})();
+</script>
+</body>
+</html>
