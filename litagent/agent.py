@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import datetime
+import threading
 from pathlib import Path
 
 from .customsites import DEFAULT_FILE, CustomSource, SiteRegistry
@@ -28,7 +29,7 @@ class Agent:
                                    cache_ttl=int(cfg.get("cache_ttl", 86400)), log=log,
                                    download_timeout=int(cfg.get("download_timeout", 25)),
                                    download_retries=int(cfg.get("download_retries", 2)))
-        self.workers = max(1, int(cfg.get("download_workers", 4)))
+        self.workers = max(1, int(cfg.get("download_workers", 10)))
         self.ctx = Ctx(self.client, cfg.get("email", ""), keys, cfg.get("tool", "litagent"), log,
                        pmc=bool(cfg.get("pubmed_pmc", True)))
         self.sources = make_sources(self.ctx)
@@ -79,46 +80,63 @@ class Agent:
         return out
 
     def search(self, specs: list[SearchSpec], names: list[str], limit: int) -> list[Record]:
-        allrecs: list[Record] = []
+        """Источники опрашиваются параллельно (у каждого свой хост); паузы и одно соединение на хост
+        обеспечивает PoliteClient. runlog и записи собираются в исходном порядке (spec × source)."""
+        tasks = [(spec, name) for spec in specs for name in names]
+        if not tasks:
+            return []
         disabled: dict[str, str] = {}
-        for spec in specs:
-            for name in names:
+        lock = threading.Lock()
+
+        def one(spec: SearchSpec, name: str):
+            with lock:
                 if name in disabled:
-                    continue
-                src = self.sources[name]
-                ok, why = src.available()
-                if not ok:
+                    return None
+            src = self.sources[name]
+            ok, why = src.available()
+            if not ok:
+                with lock:
                     disabled[name] = why
-                    self.runlog.append({"source": name, "skipped": why})
-                    self.log(f"  [{name}] пропуск: {why}")
-                    continue
-                entry = {"source": name, "spec": spec.describe()}
+                self.log(f"  [{name}] пропуск: {why}")
+                return {"source": name, "skipped": why}, []
+            entry = {"source": name, "spec": spec.describe()}
+            kept: list[Record] = []
+            try:
                 try:
-                    try:
-                        recs, info = src.search(spec, limit)
-                    except HttpError as e:
-                        if not spec.raw.get(name):
-                            raise
-                        self.log(f"  [{name}] сырой запрос не сработал ({str(e)[:80]}), повтор со стандартным")
-                        spec2 = dataclasses.replace(spec, raw={k: v for k, v in spec.raw.items() if k != name})
-                        recs, info = src.search(spec2, limit)
-                        info["raw_failed"] = str(e)[:200]
-                except Blocked as e:
+                    recs, info = src.search(spec, limit)
+                except HttpError as e:
+                    if not spec.raw.get(name):
+                        raise
+                    self.log(f"  [{name}] сырой запрос не сработал ({str(e)[:80]}), повтор со стандартным")
+                    spec2 = dataclasses.replace(spec, raw={k: v for k, v in spec.raw.items() if k != name})
+                    recs, info = src.search(spec2, limit)
+                    info["raw_failed"] = str(e)[:200]
+            except Blocked as e:
+                with lock:
                     disabled[name] = str(e)
-                    entry["error"] = str(e)
-                    self.log(f"  [{name}] СТОП: {e}")
-                except Exception as e:  # noqa: BLE001 — один источник не должен валить весь запуск
-                    entry["error"] = f"{type(e).__name__}: {e}"
-                    self.log(f"  [{name}] ошибка: {entry['error'][:160]}")
-                else:
-                    for r in recs:
-                        r.sources = [name]
-                    kept = [r for r in recs if spec.local_ok(r, strict=not src.boolean)]
-                    entry.update(info, fetched=len(recs), kept=len(kept))
-                    allrecs += kept
-                    tr = f" | translation: {info['translation']}" if info.get("translation") else ""
-                    self.log(f"  [{name}] найдено {info.get('found')}, взято {len(recs)}, после фильтра {len(kept)}{tr}")
-                self.runlog.append(entry)
+                entry["error"] = str(e)
+                self.log(f"  [{name}] СТОП: {e}")
+            except Exception as e:  # noqa: BLE001 — один источник не должен валить весь запуск
+                entry["error"] = f"{type(e).__name__}: {e}"
+                self.log(f"  [{name}] ошибка: {entry['error'][:160]}")
+            else:
+                for r in recs:
+                    r.sources = [name]
+                kept = [r for r in recs if spec.local_ok(r, strict=not src.boolean)]
+                entry.update(info, fetched=len(recs), kept=len(kept))
+                tr = f" | translation: {info['translation']}" if info.get("translation") else ""
+                self.log(f"  [{name}] найдено {info.get('found')}, взято {len(recs)}, после фильтра {len(kept)}{tr}")
+            return entry, kept
+
+        with ThreadPoolExecutor(max_workers=min(len(tasks), 10), thread_name_prefix="src") as ex:
+            results = list(ex.map(lambda t: one(*t), tasks))
+        allrecs: list[Record] = []
+        for res in results:
+            if res is None:
+                continue
+            entry, kept = res
+            self.runlog.append(entry)
+            allrecs += kept
         return dedupe(allrecs)
 
     @staticmethod
@@ -151,32 +169,43 @@ class Agent:
 
         # Скользящее окно: в работе не больше self.workers записей, и «успешные + в работе» не превышают max_downloads —
         # поэтому лишнего не скачивается. Паузы по хостам и одно соединение на хост обеспечивает PoliteClient.
-        with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="dl") as ex:
-            def fill():
-                nonlocal attempts
-                while len(pending) < self.workers and got + len(pending) < max_downloads and attempts < cap:
-                    r = next_record()
-                    if r is None:
-                        return
-                    attempts += 1
-                    pending[ex.submit(self.downloader.fetch, r, pdf_only)] = r
-            fill()
-            while pending:
-                finished, _ = wait(list(pending), return_when=FIRST_COMPLETED)
-                for fut in finished:                       # учёт и запись в индекс — только в главном потоке
-                    r = pending.pop(fut)
-                    try:
-                        st = fut.result()
-                    except Exception as e:  # noqa: BLE001  — сбой одной статьи не должен ронять весь запуск
-                        st = f"failed: {type(e).__name__}: {str(e)[:60]}"
-                    r.status = st
-                    counts[st if st in counts else "failed"] += 1
-                    if st in ("pdf", "xml", "exists"):
-                        got += 1
-                        self.lib.register(r)
-                    done_n += 1
-                    self.log(f"  [{done_n}] {st[:60]:<12} {r.short()}")
+        def collect(fut):
+            nonlocal got, done_n
+            r = pending.pop(fut)
+            try:
+                st = fut.result()
+            except Exception as e:  # noqa: BLE001  — сбой одной статьи не должен ронять весь запуск
+                st = f"failed: {type(e).__name__}: {str(e)[:60]}"
+            r.status = st
+            counts[st if st in counts else "failed"] += 1
+            if st in ("pdf", "xml", "exists"):
+                got += 1
+                self.lib.register(r)
+                self.lib.save()                       # индекс на диске после каждого успеха: прерывание ничего не теряет
+            done_n += 1
+            self.log(f"  [{done_n}] {st[:60]:<12} {r.short()}")
+
+        try:
+            with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="dl") as ex:
+                def fill():
+                    nonlocal attempts
+                    while len(pending) < self.workers and got + len(pending) < max_downloads and attempts < cap:
+                        r = next_record()
+                        if r is None:
+                            return
+                        attempts += 1
+                        pending[ex.submit(self.downloader.fetch, r, pdf_only)] = r
                 fill()
+                while pending:
+                    finished, _ = wait(list(pending), return_when=FIRST_COMPLETED)
+                    for fut in finished:               # учёт и запись в индекс — только в главном потоке
+                        collect(fut)
+                    fill()
+        except KeyboardInterrupt:
+            # with выше уже дождался воркеров (shutdown(wait=True)) — забираем всё, что успело скачаться
+            for fut in [f for f in pending if f.done()]:
+                collect(fut)
+            raise
         return counts
 
     def download_until(self, records: list[Record], target: int, oa_only: bool = False, pdf_only: bool = True,

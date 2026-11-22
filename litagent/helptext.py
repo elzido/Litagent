@@ -9,7 +9,7 @@ TOPICS: dict[str, tuple[str, str]] = {
 2. Проверьте доступность источников и модели:   python -m litagent check
 3. Ручной поиск:  python -m litagent manual -q "crispr; sickle cell" --oa-only
 4. Авто-поиск:    python -m litagent auto "цель на человеческом языке" --notes literature_search_systems.tex
-Подробно: help manual | auto | presets | sites | import | pmc | pdf | speed | clean | llm | files | limits"""),
+Подробно: help manual | auto | presets | sites | import | pmc | pdf | speed | clean | llm | web | files | limits"""),
     "manual": ("ручной режим", """\
 python -m litagent manual -q "тема" [-q "ещё тема"] [--topics файл.txt]
 Мини-язык темы: `;` — И между группами, `|` — ИЛИ внутри группы, `-слово` — исключение.
@@ -17,7 +17,7 @@ python -m litagent manual -q "тема" [-q "ещё тема"] [--topics фай�
   --site имя         искать ТОЛЬКО на одном сайте            --pick-site        выбрать один сайт из списка по номеру
   --no-pmc           PubMed без поиска в PMC и без скачивания оттуда
   --pdf-only         только статьи с реально доступным полным PDF (см. help pdf)
-  --workers N        параллельных скачиваний (по умолчанию 4; 1 — по одному; см. help speed)
+  --workers N        параллельных скачиваний (по умолчанию 10; 1 — по одному; см. help speed)
   --year-from/--year-to   диапазон лет                        --oa-only          только открытый доступ
   --title-only       искать по названию                       --strict           каждая группа обязана встретиться
   --max-downloads N  потолок скачиваний                       --dry-run          показать запросы, ничего не отправляя
@@ -75,9 +75,11 @@ PMCID, is_oa); попыток до 10×max_downloads. В results.csv — тол�
 агент повторяет поиск с вдвое большим лимитом на источник (до deepen_limit_cap = 1000), пропуская уже проверенные записи,
 и так не более --deepen-rounds раз (по умолчанию 5). Работает в manual и auto. Итог — в run.json → target."""),
     "speed": ("ускорение скачивания", """\
---workers N (litagent.toml: download_workers) — параллельные скачивания, по умолчанию 4. К одному хосту: не чаще min_interval и
+--workers N (litagent.toml: download_workers) — параллельные скачивания, по умолчанию 10. К одному хосту: не чаще min_interval и
 одно соединение за раз; к разным хостам — одновременно. Для файлов: download_retries = 2, download_timeout = 25 с, Retry-After
 дольше 20 с -> кандидат пропускается; хост с 3 сбоями подряд пропускается до конца запуска; заглушка без %PDF обрывается сразу.
+Поиск тоже параллельный: источники опрашиваются одновременно (до 10 потоков), паузы по хостам сохраняются.
+Фильтр релевантности LLM (--llm-filter) оценивает пакеты статей в 4 параллельных запроса к модели.
 Если файлы в основном на одном хосте, ускорения не будет (это правило вежливости). В конце печатается время скачивания."""),
     "clean": ("очистка папки со статьями", """\
 python -m litagent clean [--articles] [--cache] [--logs] [--all] [--dry-run] [-y] [--out папка]
@@ -97,6 +99,14 @@ GigaChat (облако Сбера, локальная модель не нужн
   Нужен сертификат Минцифры: установите Russian Trusted Root CA в систему либо укажите PEM-файл
   в [llm] ca_bundle / --gigachat-ca-bundle (скачать: https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt).
 Те же настройки — в разделе [llm] файла litagent.toml. Проверка связи: python -m litagent check"""),
+    "web": ("веб-интерфейс в браузере", """\
+python -m litagent web [--host АДРЕС] [--port N] [--no-browser] [--config файл]
+По умолчанию http://127.0.0.1:8765 (только этот компьютер), браузер открывается сам. Настройки — [web] в litagent.toml.
+Разделы: Поиск (ручной и авто-режим, лог задачи вживую, отмена, таблица результатов), Библиотека (PDF открываются в браузере),
+Запуски (отчёты runs/: запросы, ошибки, раунды плана LLM), Пресеты (запуск и удаление), Сайты (вкл/выкл своих сайтов),
+Конфиг (редактор litagent.toml: почта, ключи, LLM, скачивание; ошибки показываются под полями, файл создаётся при сохранении).
+Поиск запускается через тот же CLI, что и консоль — поведение одинаковое. Одна задача за раз.
+Безопасность: в конфиге лежат ключи — не выставляйте сервер в сеть (--host 0.0.0.0), если не понимаете, кто может подключиться."""),
     "files": ("какие файлы создаются", """\
 library/pdf/<источник>/, library/xml/<источник>/   скачанные статьи по папкам сайтов-источников (openalex, pubmed, имя вашего сайта…)
 python -m litagent organize [--dry-run]   разложить по папкам уже скачанное; --flat или folders_by_source = false — не раскладывать
@@ -113,7 +123,7 @@ def render(topic: str | None = None) -> str:
     if not topic:
         w = max(map(len, TOPICS))
         rows = "\n".join(f"  {k:<{w}}  {v[0]}" for k, v in TOPICS.items())
-        return f"Справка: python -m litagent help <тема>\n\n{rows}\n\nКоманды: manual, auto, check, notes, sites, clean, help (у каждой есть -h)."
+        return f"Справка: python -m litagent help <тема>\n\n{rows}\n\nКоманды: manual, auto, check, notes, sites, clean, web, help (у каждой есть -h)."
     t = topic.strip().lower()
     if t in TOPICS:
         return f"== {t}: {TOPICS[t][0]} ==\n{TOPICS[t][1]}"

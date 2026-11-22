@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from .llm import LLM, LLMError
@@ -288,17 +289,21 @@ def review_plan(llm: LLM, policy: Policy, notes: Notes, goal: str, plan: Plan, r
 
 
 def llm_filter(llm: LLM, goal: str, records: list[Record], min_score: float, batch: int = 6, log=print) -> list[Record]:
+    """Пакеты оцениваются параллельно (до 4 запросов к модели сразу): каждый пакет пишет оценки только
+    своим записям. Локальная Ollama всё равно считает последовательно, облачная (GigaChat) — выигрывает."""
     system = ("You grade how relevant scientific papers are to a research goal. "
               'Reply with JSON: {"scores": [{"n": 1, "score": 0-10}, ...]}. 10 = exactly on topic, 0 = unrelated. '
               "Judge by title and abstract only.")
-    for i in range(0, len(records), batch):
-        chunk = records[i:i + batch]
+    chunks = [(i // batch + 1, records[i:i + batch]) for i in range(0, len(records), batch)]
+
+    def grade(item) -> None:
+        num, chunk = item
         items = "\n".join(f"{k + 1}. ({r.year or '?'}) {r.title}\n   {(r.abstract or '')[:500]}" for k, r in enumerate(chunk))
         try:
             d = llm.chat_json(system, f"Goal: {goal}\n\nPapers:\n{items}")
         except LLMError as e:
-            log(f"  фильтр: пакет {i // batch + 1} пропущен ({str(e)[:80]})")
-            continue
+            log(f"  фильтр: пакет {num} пропущен ({str(e)[:80]})")
+            return
         for s in d.get("scores", []) if isinstance(d, dict) else []:
             try:
                 n, sc = int(s["n"]), float(s["score"])
@@ -306,6 +311,13 @@ def llm_filter(llm: LLM, goal: str, records: list[Record], min_score: float, bat
                 continue
             if 1 <= n <= len(chunk):
                 chunk[n - 1].score = max(0.0, min(10.0, sc))
+
+    if len(chunks) > 1:
+        with ThreadPoolExecutor(max_workers=min(len(chunks), 4), thread_name_prefix="llm") as ex:
+            list(ex.map(grade, chunks))
+    else:
+        for item in chunks:
+            grade(item)
     return [r for r in records if r.score is None or r.score >= min_score]
 
 

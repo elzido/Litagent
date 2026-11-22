@@ -5,7 +5,7 @@ email = "you@example.org"          # обязателен: идёт в User-Agen
 out = "library"                    # куда класть pdf/, xml/, index.json, runs/
 sources = ["openalex", "pubmed", "europepmc", "arxiv", "semanticscholar", "crossref", "core", "doaj"]
 limit_per_source = 50
-download_workers = 4               # параллельных скачиваний (1 — по одному); к одному хосту всё равно по одному соединению
+download_workers = 10              # параллельных скачиваний (1 — по одному); к одному хосту всё равно по одному соединению
 download_timeout = 25              # сек на файл (простой сокета)
 download_retries = 2               # попыток на файл (обычные запросы API: 5)
 pdf_only = false                   # true: оставлять только статьи с реально скачанным PDF (как --pdf-only)
@@ -50,3 +50,8 @@ min_results = 10
 llm_filter = false                 # оценка релевантности каждой найденной статьи моделью
 min_score = 6
 notes = ["literature_search_systems.tex"]   # файл(ы) с пометками: .tex, .md, .txt
+
+[web]                              # веб-интерфейс: python -m litagent web
+host = "127.0.0.1"                 # только этот компьютер; другой адрес откроет конфиг и ключи сети
+port = 8765
+open_browser = true                # открывать браузер при запуске (выключить: --no-browser)
