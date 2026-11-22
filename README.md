@@ -3,7 +3,7 @@
 Два режима:
 
 - **manual** — вы задаёте темы и ключевые слова, агент ищет по нескольким источникам, склеивает дубли и скачивает открытые копии.
-- **auto** — вы описываете цель обычным языком, **локальная LLM** (Ollama / LM Studio / llama.cpp) строит запрос и выбирает источники с учётом пометок из вашего `.tex`-файла, при необходимости уточняет план по результатам и фильтрует выдачу по релевантности.
+- **auto** — вы описываете цель обычным языком, **LLM** (локальная Ollama / LM Studio / llama.cpp или облачная GigaChat) строит запрос и выбирает источники с учётом пометок из вашего `.tex`-файла, при необходимости уточняет план по результатам и фильтрует выдачу по релевантности.
 
 Без внешних зависимостей: только стандартная библиотека Python ≥ 3.11.
 
@@ -101,6 +101,10 @@ python -m litagent auto "Найти свежие статьи про CRISPR пр
 # LM Studio / llama.cpp server
 python -m litagent auto "..." --llm-provider openai --llm-url http://localhost:1234/v1 --model my-model
 
+# GigaChat (облако Сбера, локальная модель не нужна)
+export GIGACHAT_CLIENT_ID="..." GIGACHAT_CLIENT_SECRET="..."   # из личного кабинета Sber Studio
+python -m litagent auto "..." --llm-provider gigachat --model GigaChat-2-Pro
+
 # другая модель или адрес Ollama
 python -m litagent auto "..." --model gemma4 --llm-url http://127.0.0.1:11434
 
@@ -116,6 +120,36 @@ python -m litagent auto "..." --notes literature_search_systems.tex --dry-run
 4. Поиск → дедупликация. Затем (если `--rounds` ≥ 2) модель смотрит на сводку результатов (сколько найдено, `querytranslation` PubMed, примеры названий) и либо подтверждает, либо присылает уточнённый план.
 5. `--llm-filter`: модель ставит 0–10 релевантность по названию и аннотации, ниже `--min-score` отсекается, остальное ранжируется по оценке.
 6. Если LLM недоступна или отвечает мусором, агент сам переключается на эвристику (ключевые слова, «последние N лет», «открытый доступ»); кириллица без LLM не переводится — для англоязычных баз это даст плохую выдачу, и агент об этом предупредит.
+
+### GigaChat вместо локальной модели
+
+GigaChat — облачная модель Сбера, ничего локально запускать не нужно. API частично совместим с OpenAI
+(`/chat/completions`), но авторизация своя, поэтому это отдельный провайдер:
+
+```bash
+export GIGACHAT_CLIENT_ID="..."                       # Client ID из кабинета Sber Studio
+export GIGACHAT_CLIENT_SECRET="..."                   # Client Secret оттуда же
+python -m litagent auto "свежие статьи про CRISPR" --llm-provider gigachat
+python -m litagent check                              # строка [LLM gigachat] покажет, есть ли связь
+```
+
+- **Реквизиты — два поля**: `[keys] gigachat_client_id` и `gigachat_client_secret` в `litagent.toml`
+  (или переменные `GIGACHAT_CLIENT_ID` / `GIGACHAT_CLIENT_SECRET`). Base64-ключ авторизации агент собирает сам,
+  случайные пробелы и переносы по краям значений убираются. Заполнять нужно оба поля.
+  Готовый ключ тоже поддерживается как запасной вариант: `[keys] gigachat` / `GIGACHAT_CREDENTIALS` / `[llm] api_key`.
+- **Токен агент получает сам**: OAuth-запрос с ключом авторизации (`Basic` + `RqUID` + scope), токен живёт 30 минут,
+  кэшируется и обновляется при истечении (в том числе по ответу 401).
+- **Scope**: `--gigachat-scope` или `[llm] scope` — `GIGACHAT_API_PERS` (физлица, по умолчанию),
+  `GIGACHAT_API_CORP` / `GIGACHAT_API_B2B` (юрлица). Должен совпадать с версией ключа в кабинете.
+- **Модели**: `--model` / `[llm] model` — `GigaChat` (по умолчанию), `GigaChat-Pro`, `GigaChat-Max`,
+  `GigaChat-2`, `GigaChat-2-Pro`, `GigaChat-2-Max`, `GigaChat-3-Lightning`. Адрес API — `https://api.giga.chat/v1` (`[llm] base_url`).
+- **Сертификат Минцифры**: серверы Сбера используют российский корневой сертификат, которого нет в стандартных
+  хранилищах. Без него будет ошибка `CERTIFICATE_VERIFY_FAILED`. Решения (любое одно):
+  установить [Russian Trusted Root CA](https://www.gosuslugi.ru/crt) в систему; либо скачать
+  [PEM](https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt) и указать путь в `[llm] ca_bundle`
+  или `--gigachat-ca-bundle`; либо задать переменную `SSL_CERT_FILE`.
+- JSON-планы модель отдаёт как обычный текст — агент сам вытаскивает JSON и переспрашивает при мусоре,
+  отдельный «JSON-режим» GigaChat не нужен.
 
 ## Скорость скачивания
 
@@ -346,6 +380,10 @@ Ollama по умолчанию использует короткое окно к
 отключает `think` у «думающих» моделей, ужимает заметки в промпте планировщика и нормализует ответ модели
 (регистр/алиасы источников, план внутри `{"plan": …}`, русские термины → повторный запрос на английском).
 Если авто-режим всё же уходит в эвристику, причина печатается строкой «LLM не дала план (…)».
+
+Для GigaChat частые причины: не заданы Client ID / Client Secret (`[keys] gigachat_client_id`, `gigachat_client_secret`), scope не совпадает с версией ключа
+(PERS/CORP/B2B), нет сертификата Минцифры (`CERTIFICATE_VERIFY_FAILED` — см. «GigaChat вместо локальной модели»)
+или закрыт исходящий HTTPS. Строка `[LLM gigachat]` в `python -m litagent check` показывает, есть ли связь.
 
 ### Набрано меньше N статей
 

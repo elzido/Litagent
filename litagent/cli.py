@@ -14,7 +14,7 @@ from .agent import Agent
 from .customsites import DEFAULT_FILE, CustomSource, SiteRegistry
 from .helptext import render as render_help
 from .http import PoliteClient
-from .llm import LLM
+from .llm import GIGACHAT_SCOPES, LLM, gigachat_key
 from .models import SearchSpec, parse_topic
 from .notes import Notes
 from .remote import fetch_text, is_url, parse_sites, pick, sanitize
@@ -30,11 +30,15 @@ DEFAULT_CFG = {
     "limit_per_source": 50, "max_downloads": 20, "cache_ttl": 86400, "custom_sites": DEFAULT_FILE, "pubmed_pmc": True, "pdf_only": False,
     "deepen_rounds": 5, "deepen_limit_cap": 1000, "folders_by_source": True, "presets_file": presets.DEFAULT_FILE,
     "download_workers": 4, "download_timeout": 25, "download_retries": 2,
-    "keys": {"ncbi": "", "openalex": "", "s2": "", "core": ""},
-    "llm": {"provider": "ollama", "base_url": "", "model": "gemma4", "temperature": 0.2, "timeout": 300, "api_key": "", "num_ctx": 8192},
+    "keys": {"ncbi": "", "openalex": "", "s2": "", "core": "", "gigachat": "",
+             "gigachat_client_id": "", "gigachat_client_secret": ""},
+    "llm": {"provider": "ollama", "base_url": "", "model": "gemma4", "temperature": 0.2, "timeout": 300, "api_key": "", "num_ctx": 8192,
+            "scope": "GIGACHAT_API_PERS", "ca_bundle": "", "oauth_url": ""},
     "auto": {"rounds": 2, "min_results": 10, "llm_filter": False, "min_score": 6, "notes": []},
 }
-ENV_KEYS = {"ncbi": "NCBI_API_KEY", "openalex": "OPENALEX_API_KEY", "s2": "S2_API_KEY", "core": "CORE_API_KEY"}
+ENV_KEYS = {"ncbi": "NCBI_API_KEY", "openalex": "OPENALEX_API_KEY", "s2": "S2_API_KEY", "core": "CORE_API_KEY",
+            "gigachat": "GIGACHAT_CREDENTIALS",
+            "gigachat_client_id": "GIGACHAT_CLIENT_ID", "gigachat_client_secret": "GIGACHAT_CLIENT_SECRET"}
 
 
 def log(msg: str = "") -> None:
@@ -294,15 +298,37 @@ def cmd_manual(a) -> int:
 
 
 # ------------------------------------------------------------------ auto
+def gigachat_auth(cfg: dict) -> str | None:
+    """Ключ авторизации GigaChat: из пары Client ID + Client Secret (Base64 собирает код)
+    или готовый ключ ([llm] api_key / [keys] gigachat / GIGACHAT_CREDENTIALS)."""
+    k, c = cfg["keys"], cfg["llm"]
+    cid, sec = k.get("gigachat_client_id") or "", k.get("gigachat_client_secret") or ""
+    if cid and sec:
+        return gigachat_key(cid, sec)
+    if cid or sec:
+        raise SystemExit("GigaChat: заполните оба поля — gigachat_client_id и gigachat_client_secret "
+                         "(или уберите их и задайте готовый ключ gigachat / GIGACHAT_CREDENTIALS).")
+    return c.get("api_key") or k.get("gigachat") or None
+
+
 def make_llm(cfg: dict, a) -> LLM | None:
     if a.no_llm:
         return None
     c = cfg["llm"]
-    llm = LLM(a.llm_provider or c["provider"], a.llm_url or c["base_url"] or None, a.model or c["model"],
-              float(c["temperature"]), int(c["timeout"]), c.get("api_key") or None, int(c.get("num_ctx") or 8192))
+    provider = a.llm_provider or c["provider"]
+    api_key = gigachat_auth(cfg) if provider == "gigachat" else c.get("api_key") or None
+    llm = LLM(provider, a.llm_url or c["base_url"] or None, a.model or c["model"],
+              float(c["temperature"]), int(c["timeout"]), api_key, int(c.get("num_ctx") or 8192),
+              scope=getattr(a, "gigachat_scope", None) or c.get("scope") or "GIGACHAT_API_PERS",
+              ca_bundle=getattr(a, "gigachat_ca_bundle", None) or c.get("ca_bundle") or None,
+              oauth_url=c.get("oauth_url") or None)
     if not llm.ping():
-        log(f"⚠ Локальная LLM не отвечает ({llm.provider} @ {llm.base_url}). Запустите её (например `ollama serve`) "
-            f"или используйте --no-llm. Продолжаю с эвристикой.")
+        if provider == "gigachat":
+            log("⚠ GigaChat недоступна. Проверьте ключ авторизации (GIGACHAT_CREDENTIALS / [keys] gigachat), scope, "
+                "сеть и сертификат Минцифры ([llm] ca_bundle). Продолжаю с эвристикой.")
+        else:
+            log(f"⚠ Локальная LLM не отвечает ({llm.provider} @ {llm.base_url}). Запустите её (например `ollama serve`) "
+                f"или используйте --no-llm. Продолжаю с эвристикой.")
         return None
     return llm
 
@@ -377,7 +403,11 @@ def cmd_check(a) -> int:
         except Exception as e:  # noqa: BLE001
             bad += 1
             log(f"[{n:<16}] FAIL  {type(e).__name__}: {str(e)[:140]}")
-    llm = LLM(cfg["llm"]["provider"], cfg["llm"]["base_url"] or None, cfg["llm"]["model"])
+    c = cfg["llm"]
+    api_key = gigachat_auth(cfg) if c["provider"] == "gigachat" else c.get("api_key") or None
+    llm = LLM(c["provider"], c["base_url"] or None, c["model"], api_key=api_key,
+              scope=c.get("scope") or "GIGACHAT_API_PERS", ca_bundle=c.get("ca_bundle") or None,
+              oauth_url=c.get("oauth_url") or None)
     log(f"[LLM {llm.provider:<11}] {'OK' if llm.ping() else 'недоступна'} ({llm.base_url}, модель {llm.model})")
     return 1 if bad else 0
 
@@ -721,9 +751,15 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--goal-file", metavar="ФАЙЛ", help="прочитать цель из текстового файла (вместо аргумента goal)")
     au.add_argument("--notes", action="append", help=".tex с аналитикой (или .md/.txt со своими пометками); можно несколько")
     au.add_argument("--no-llm", action="store_true", help="не использовать LLM (эвристика)")
-    au.add_argument("--llm-provider", choices=["ollama", "openai"], help="тип API модели: ollama или openai-совместимый (LM Studio, llama.cpp); по умолчанию ollama")
-    au.add_argument("--llm-url", metavar="АДРЕС", help="адрес сервера модели (ollama: http://127.0.0.1:11434, openai-совместимый: http://localhost:1234/v1)")
-    au.add_argument("--model", metavar="ИМЯ", help="имя модели (по умолчанию gemma4)")
+    au.add_argument("--llm-provider", choices=["ollama", "openai", "gigachat"], help="тип API модели: ollama, openai-совместимый (LM Studio, llama.cpp) "
+                                                                                   "или gigachat (облако Сбера); по умолчанию ollama")
+    au.add_argument("--llm-url", metavar="АДРЕС", help="адрес сервера модели (ollama: http://127.0.0.1:11434, openai-совместимый: http://localhost:1234/v1, "
+                                                       "gigachat: https://api.giga.chat/v1)")
+    au.add_argument("--model", metavar="ИМЯ", help="имя модели (по умолчанию gemma4; для gigachat — GigaChat)")
+    au.add_argument("--gigachat-scope", choices=list(GIGACHAT_SCOPES), help="версия API GigaChat: GIGACHAT_API_PERS (физлица, по умолчанию), "
+                                                                            "GIGACHAT_API_CORP или GIGACHAT_API_B2B (юрлица)")
+    au.add_argument("--gigachat-ca-bundle", metavar="PEM", help="путь к корневому сертификату Минцифры для GigaChat, "
+                                                                "если он не установлен в системе (иначе [llm] ca_bundle)")
     au.add_argument("--rounds", type=int, help="максимум раундов уточнения плана")
     au.add_argument("--min-results", type=int, metavar="N", help="сколько записей считать достаточным, чтобы не уточнять план дальше (по умолчанию 10)")
     au.add_argument("--llm-filter", action="store_true", help="отфильтровать результаты оценкой релевантности LLM")

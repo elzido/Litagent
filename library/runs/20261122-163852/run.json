@@ -1,0 +1,163 @@
+{
+  "run_id": "20261122-163852",
+  "mode": "auto",
+  "started": "2026-11-22T16:38:52",
+  "queries": [
+    {
+      "source": "openalex",
+      "skipped": "не задан ключ (openalex); см. README",
+      "round": 1
+    },
+    {
+      "source": "pubmed",
+      "spec": "left cerebellar disease AND cerebellar pathology",
+      "query": "\"left cerebellar disease\"[tiab] AND \"cerebellar pathology\"[tiab]",
+      "found": 0,
+      "translation": "\"left cerebellar disease\"[tiab] AND \"cerebellar pathology\"[tiab]",
+      "pmc": {
+        "query": "(\"left cerebellar disease\"[Title] OR \"left cerebellar disease\"[Abstract]) AND (\"cerebellar pathology\"[Title] OR \"cerebellar pathology\"[Abstract])",
+        "found": 0,
+        "translation": "(\"left cerebellar disease\"[Title] OR \"left cerebellar disease\"[All Fields]) AND (\"cerebellar pathology\"[Title] OR \"cerebellar pathology\"[All Fields])",
+        "tags": true
+      },
+      "fetched": 0,
+      "kept": 0,
+      "round": 1
+    },
+    {
+      "source": "openalex",
+      "skipped": "не задан ключ (openalex); см. README",
+      "round": 2
+    },
+    {
+      "source": "pubmed",
+      "spec": "left cerebellar disease AND cerebellar pathology AND lateral cerebellar syndrome",
+      "query": "\"left cerebellar disease\"[tiab] AND \"cerebellar pathology\"[tiab] AND \"lateral cerebellar syndrome\"[tiab]",
+      "found": 0,
+      "translation": "\"left cerebellar disease\"[tiab] AND \"cerebellar pathology\"[tiab] AND \"lateral cerebellar syndrome\"[tiab]",
+      "pmc": {
+        "query": "(\"left cerebellar disease\"[Title] OR \"left cerebellar disease\"[Abstract]) AND (\"cerebellar pathology\"[Title] OR \"cerebellar pathology\"[Abstract]) AND (\"lateral cerebellar syndrome\"[Title] OR \"lateral cerebellar syndrome\"[Abstract])",
+        "found": 0,
+        "translation": "(\"left cerebellar disease\"[Title] OR \"left cerebellar disease\"[All Fields]) AND (\"cerebellar pathology\"[Title] OR \"cerebellar pathology\"[All Fields]) AND (\"lateral cerebellar syndrome\"[Title] OR \"lateral cerebellar syndrome\"[All Fields])",
+        "tags": true
+      },
+      "fetched": 0,
+      "kept": 0,
+      "round": 2
+    }
+  ],
+  "specs": [
+    {
+      "groups": [
+        [
+          "left cerebellar disease"
+        ],
+        [
+          "cerebellar pathology"
+        ]
+      ],
+      "exclude": [],
+      "year_from": null,
+      "year_to": null,
+      "open_access": false,
+      "title_only": false,
+      "strict": false,
+      "arxiv_cats": [],
+      "raw": {},
+      "label": "Search for biomedical literature about disease of the left cerebellum using Engl"
+    },
+    {
+      "groups": [
+        [
+          "left cerebellar disease"
+        ],
+        [
+          "cerebellar pathology"
+        ],
+        [
+          "lateral cerebellar syndrome"
+        ]
+      ],
+      "exclude": [],
+      "year_from": null,
+      "year_to": null,
+      "open_access": false,
+      "title_only": false,
+      "strict": false,
+      "arxiv_cats": [],
+      "raw": {},
+      "label": ""
+    }
+  ],
+  "http": {
+    "requests": 4,
+    "cache_hits": 0,
+    "retries": 0
+  },
+  "total_unique": 0,
+  "downloads": null,
+  "goal": "Статьи про болезнь левого мозжевичка",
+  "rounds": [
+    {
+      "round": 1,
+      "source": "llm",
+      "plan": {
+        "rationale": "Search for biomedical literature about disease of the left cerebellum using English keywords and sources that index full text.",
+        "sources": [
+          "openalex",
+          "pubmed"
+        ],
+        "groups": [
+          [
+            "left cerebellar disease"
+          ],
+          [
+            "cerebellar pathology"
+          ]
+        ],
+        "exclude": [],
+        "year_from": null,
+        "year_to": null,
+        "open_access_only": false,
+        "title_only": false,
+        "arxiv_categories": [],
+        "raw": {},
+        "max_per_source": 50
+      },
+      "spec": "left cerebellar disease AND cerebellar pathology",
+      "unique_after": 0,
+      "verdict": "too_few",
+      "reason": "No records found; consider expanding synonyms and adding broader terms."
+    },
+    {
+      "round": 2,
+      "source": "llm",
+      "plan": {
+        "sources": [
+          "openalex",
+          "pubmed"
+        ],
+        "groups": [
+          [
+            "left cerebellar disease"
+          ],
+          [
+            "cerebellar pathology"
+          ],
+          [
+            "lateral cerebellar syndrome"
+          ]
+        ],
+        "exclude": [],
+        "year_from": null,
+        "year_to": null,
+        "open_access_only": false,
+        "title_only": false,
+        "arxiv_categories": [],
+        "raw": {}
+      },
+      "spec": "left cerebellar disease AND cerebellar pathology AND lateral cerebellar syndrome",
+      "unique_after": 0
+    }
+  ]
+}

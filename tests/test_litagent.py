@@ -1,10 +1,15 @@
 """Офлайн-тесты на моках (сеть не нужна). Запуск: python -m unittest discover -s tests -v"""
+import base64
 import csv
+import io
 import json
 import os
+import ssl
 import sys
 import tempfile
+import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -331,7 +336,7 @@ class TestHeuristic(unittest.TestCase):
 
 # ====================================================================== свои сайты, очистка, LLM-умолчания
 from litagent.customsites import CustomSource, Site, SiteRegistry, get_path, guess_mapping  # noqa: E402
-from litagent.llm import LLM                                                              # noqa: E402
+from litagent.llm import LLM, gigachat_key                                                # noqa: E402
 from litagent.http import HttpError                                                       # noqa: E402
 from litagent.remote import pick                                                          # noqa: E402
 from litagent.helptext import TOPICS, render as render_help                              # noqa: E402
@@ -773,6 +778,156 @@ class TestLLMDefaults(unittest.TestCase):
         txt = Path(__file__).resolve().parents[1].joinpath("litagent.example.toml").read_text(encoding="utf-8")
         self.assertIn('model = "gemma4"', txt)
         self.assertIn("127.0.0.1:11434", txt)
+
+
+class TestGigaChat(unittest.TestCase):
+    """GigaChat: OAuth, кэш токена, Bearer, сертификат Минцифры — офлайн, urlopen замоканы."""
+
+    def _net(self, calls, contexts=None, token="tok", expires_at=None, content="{}", unauthorized_once=False):
+        state = {"401": unauthorized_once}
+
+        def urlopen(req, timeout=None, context=None):
+            calls.append(req)
+            if contexts is not None:
+                contexts.append(context)
+            if req.full_url.endswith("/oauth"):
+                exp = time.time() * 1000 + 1_800_000 if expires_at is None else expires_at
+                return io.BytesIO(json.dumps({"access_token": token, "expires_at": exp}).encode())
+            if state["401"]:
+                state["401"] = False
+                raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b"token expired"))
+            return io.BytesIO(json.dumps({"choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+                                          "usage": {"prompt_tokens": 7}}).encode())
+        return urlopen
+
+    def test_defaults(self):
+        llm = LLM("gigachat", api_key="k")
+        self.assertEqual(llm.base_url, "https://api.giga.chat/v1")
+        self.assertEqual(llm.model, "GigaChat")                       # gemma4 из конфига подменяется на базовую модель
+        self.assertEqual(llm.oauth_url, "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")
+        self.assertEqual(llm.scope, "GIGACHAT_API_PERS")
+        self.assertEqual(LLM("gigachat", model="GigaChat-2-Pro").model, "GigaChat-2-Pro")
+        self.assertEqual(LLM("gigachat", base_url="https://old.example/v1/").base_url, "https://old.example/v1")
+        self.assertEqual(cli.DEFAULT_CFG["llm"]["scope"], "GIGACHAT_API_PERS")
+        with self.assertRaises(ValueError):
+            LLM("gigachat", scope="WRONG_SCOPE")
+
+    def test_oauth_request_and_token_cache(self):
+        calls = []
+        llm = LLM("gigachat", api_key="authkey", scope="GIGACHAT_API_CORP")
+        with mock.patch("litagent.llm.urllib.request.urlopen", self._net(calls, content='{"groups": [["a"]]}')):
+            self.assertEqual(llm.chat_json("s", "u"), {"groups": [["a"]]})
+            llm.chat("s", "u")
+        oauth = [r for r in calls if r.full_url.endswith("/oauth")]
+        chats = [r for r in calls if r.full_url.endswith("/chat/completions")]
+        self.assertEqual(len(oauth), 1)                               # второй запрос взял токен из кэша
+        self.assertEqual(oauth[0].get_header("Authorization"), "Basic authkey")
+        self.assertTrue(oauth[0].get_header("Rquid"))                 # RqUID: uuid4
+        self.assertEqual(oauth[0].data, b"scope=GIGACHAT_API_CORP")
+        self.assertEqual(len(chats), 2)
+        self.assertEqual(chats[0].get_header("Authorization"), "Bearer tok")
+        payload = json.loads(chats[0].data)
+        self.assertEqual((payload["model"], payload["stream"]), ("GigaChat", False))
+        self.assertEqual(payload["messages"][0], {"role": "system", "content": "s"})
+        self.assertEqual(llm.last_info["prompt_tokens"], 7)
+
+    def test_expired_token_refetched(self):
+        calls = []
+        llm = LLM("gigachat", api_key="k")
+        with mock.patch("litagent.llm.urllib.request.urlopen",
+                        self._net(calls, expires_at=time.time() * 1000 - 1000)):
+            llm.chat("s", "u")
+            llm.chat("s", "u")
+        self.assertEqual(len([r for r in calls if r.full_url.endswith("/oauth")]), 2)
+
+    def test_401_refreshes_token_and_retries(self):
+        calls = []
+        llm = LLM("gigachat", api_key="k")
+        with mock.patch("litagent.llm.urllib.request.urlopen", self._net(calls, unauthorized_once=True)):
+            self.assertEqual(llm.chat("s", "u"), "{}")
+        self.assertEqual(len([r for r in calls if r.full_url.endswith("/oauth")]), 2)
+        self.assertEqual(len([r for r in calls if r.full_url.endswith("/chat/completions")]), 2)
+
+    def test_no_key_is_explicit_error_and_ping_false(self):
+        llm = LLM("gigachat")
+        with self.assertRaises(LLMError) as cm:
+            llm.chat("s", "u")
+        self.assertIn("gigachat_client_id", str(cm.exception))
+        self.assertFalse(llm.ping())
+
+    def test_key_assembled_from_id_secret(self):
+        key = gigachat_key("  id-123\n", "secret-456 ")                 # случайные пробелы/переносы убираются
+        self.assertEqual(base64.b64decode(key).decode(), "id-123:secret-456")
+
+    def test_cli_id_secret_pair(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "litagent.toml")
+            p.write_text('[llm]\nprovider = "gigachat"\n[keys]\ngigachat = "old-key"\n'
+                         'gigachat_client_id = "cid"\ngigachat_client_secret = "sec"\n', encoding="utf-8")
+            cfg = cli.load_config(str(p))
+        a = cli.build_parser().parse_args(["auto", "цель"])
+        with mock.patch.object(LLM, "ping", return_value=True):
+            llm = cli.make_llm(cfg, a)
+        self.assertEqual(llm.api_key, base64.b64encode(b"cid:sec").decode())   # пара главнее готового ключа
+        cfg["keys"]["gigachat_client_secret"] = ""
+        with self.assertRaises(SystemExit):                                    # заполнено только одно поле — понятная ошибка
+            cli.make_llm(cfg, a)
+
+    def test_cli_id_secret_from_env(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "litagent.toml")
+            p.write_text("", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"GIGACHAT_CLIENT_ID": "envid", "GIGACHAT_CLIENT_SECRET": "envsec"}):
+                cfg = cli.load_config(str(p))
+        self.assertEqual((cfg["keys"]["gigachat_client_id"], cfg["keys"]["gigachat_client_secret"]),
+                         ("envid", "envsec"))
+
+    def test_ping_uses_models_with_bearer(self):
+        calls = []
+        llm = LLM("gigachat", api_key="k")
+        with mock.patch("litagent.llm.urllib.request.urlopen", self._net(calls)):
+            self.assertTrue(llm.ping())
+        self.assertTrue(any(r.full_url.endswith("/models") and r.get_header("Authorization") == "Bearer tok"
+                            for r in calls))
+
+    def test_ca_bundle_builds_ssl_context(self):
+        calls, contexts = [], []
+        llm = LLM("gigachat", api_key="k", ca_bundle="/tmp/russian_ca.pem")
+        ctx = object()
+        with mock.patch("litagent.llm.ssl.create_default_context", return_value=ctx) as m, \
+                mock.patch("litagent.llm.urllib.request.urlopen", self._net(calls, contexts)):
+            llm.chat("s", "u")
+        m.assert_called_with(cafile="/tmp/russian_ca.pem")
+        self.assertTrue(contexts)
+        self.assertTrue(all(c is ctx for c in contexts))              # и OAuth, и chat идут с этим контекстом
+
+    def test_cert_error_gives_hint(self):
+        def urlopen(req, timeout=None, context=None):
+            raise urllib.error.URLError(ssl.SSLCertVerificationError("certificate verify failed"))
+        with mock.patch("litagent.llm.urllib.request.urlopen", urlopen):
+            with self.assertRaises(LLMError) as cm:
+                LLM("gigachat", api_key="k").chat("s", "u")
+        self.assertIn("Минцифры", str(cm.exception))
+        self.assertIn("ca_bundle", str(cm.exception))
+
+    def test_cli_wiring(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d, "litagent.toml")
+            p.write_text('[llm]\nprovider = "gigachat"\n', encoding="utf-8")
+            with mock.patch.dict(os.environ, {"GIGACHAT_CREDENTIALS": "envkey"}):
+                cfg = cli.load_config(str(p))
+        self.assertEqual(cfg["keys"]["gigachat"], "envkey")
+        a = cli.build_parser().parse_args(["auto", "цель", "--llm-provider", "gigachat",
+                                           "--gigachat-scope", "GIGACHAT_API_CORP"])
+        with mock.patch.object(LLM, "ping", return_value=True):
+            llm = cli.make_llm(cfg, a)
+        self.assertEqual((llm.provider, llm.api_key, llm.scope, llm.model),
+                         ("gigachat", "envkey", "GIGACHAT_API_CORP", "GigaChat"))
+
+    def test_example_config_mentions_gigachat(self):
+        txt = Path(__file__).resolve().parents[1].joinpath("litagent.example.toml").read_text(encoding="utf-8")
+        self.assertIn("GIGACHAT_CREDENTIALS", txt)
+        self.assertIn('provider = "gigachat"', txt)
 
 
 REMOTE_URL = "https://example.org/sites.json"
