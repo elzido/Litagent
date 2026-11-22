@@ -22,14 +22,27 @@ ncbi = ""                          # PubMed: 10 запр./с вместо 3
 openalex = ""                      # ОБЯЗАТЕЛЕН для OpenAlex (бесплатный)
 s2 = ""                            # Semantic Scholar: без ключа часто 429
 core = ""                          # ОБЯЗАТЕЛЕН для CORE (бесплатный)
+gigachat_client_id = ""            # GigaChat: Client ID из кабинета Sber Studio (или переменная GIGACHAT_CLIENT_ID)
+gigachat_client_secret = ""        # GigaChat: Client Secret оттуда же (или GIGACHAT_CLIENT_SECRET); Base64-ключ агент соберёт сам
+gigachat = ""                      # запасной вариант: готовый ключ авторизации (лучше переменная GIGACHAT_CREDENTIALS)
 
-[llm]                              # локальная модель для авто-режима
-provider = "ollama"                # "ollama" или "openai" (LM Studio, llama.cpp server, vLLM)
-base_url = ""                      # пусто = http://127.0.0.1:11434 (ollama) / http://localhost:1234/v1 (openai)
+[llm]                              # модель для авто-режима: локальная или облачная
+provider = "ollama"                # "ollama", "openai" (LM Studio, llama.cpp server, vLLM) или "gigachat" (облако Сбера)
+base_url = ""                      # пусто = http://127.0.0.1:11434 (ollama) / http://localhost:1234/v1 (openai) / https://api.giga.chat/v1 (gigachat)
 model = "gemma4"
 temperature = 0.2
 timeout = 300
 num_ctx = 8192                      # окно контекста Ollama; без него Ollama режет длинный промпт (заметки из .tex)
+
+# GigaChat: реквизиты — [keys] gigachat_client_id + gigachat_client_secret (личный кабинет Sber Studio),
+# Base64-ключ авторизации агент собирает сам. Токен доступа получает и обновляет сам (OAuth, 30 минут).
+# Нужен сертификат Минцифры:
+# установите Russian Trusted Root CA в систему или укажите PEM в ca_bundle.
+# provider = "gigachat"
+# model = "GigaChat"               # GigaChat, GigaChat-Pro, GigaChat-Max, GigaChat-2, GigaChat-2-Pro, GigaChat-2-Max, GigaChat-3-Lightning
+# scope = "GIGACHAT_API_PERS"      # GIGACHAT_API_PERS (физлица) | GIGACHAT_API_CORP | GIGACHAT_API_B2B (юрлица)
+# ca_bundle = ""                   # путь к russian_trusted_root_ca_pem.crt, если сертификат не установлен в системе
+# oauth_url = ""                   # пусто = https://ngw.devices.sberbank.ru:9443/api/v2/oauth
 
 [auto]
 rounds = 2                         # 1 = без уточнения плана

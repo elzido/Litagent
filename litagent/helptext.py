@@ -85,9 +85,17 @@ python -m litagent clean [--articles] [--cache] [--logs] [--all] [--dry-run] [-y
   --articles  .pdf/.xml (и .part) из pdf/ и xml/ (включая папки источников), чужие файлы не трогает; пустые папки источников убирает
   --cache     HTTP-кэш: повторные запросы снова пойдут в сеть     --logs (или --runs)  runs/<время>/run.json и results.csv
   --all       то же, что без параметров. Индекс приводится в порядок. Без -y спрашивает подтверждение; --dry-run только показывает."""),
-    "llm": ("локальная модель", """\
+    "llm": ("модель для авто-режима", """\
 По умолчанию: Ollama, модель gemma4, адрес http://127.0.0.1:11434   (ollama pull gemma4)
   --model имя  --llm-url адрес  --llm-provider ollama|openai (LM Studio, llama.cpp: http://localhost:1234/v1)
+GigaChat (облако Сбера, локальная модель не нужна):
+  [keys] gigachat_client_id + gigachat_client_secret  # Client ID и Client Secret из кабинета Sber Studio
+  (или переменные GIGACHAT_CLIENT_ID / GIGACHAT_CLIENT_SECRET; Base64-ключ агент соберёт сам)
+  python -m litagent auto "цель" --llm-provider gigachat [--model GigaChat-2-Pro]
+  Адрес https://api.giga.chat/v1; токен агент получает сам (OAuth, живёт 30 минут, обновляется).
+  Scope: --gigachat-scope GIGACHAT_API_PERS (физлица, по умолчанию) | GIGACHAT_API_CORP | GIGACHAT_API_B2B.
+  Нужен сертификат Минцифры: установите Russian Trusted Root CA в систему либо укажите PEM-файл
+  в [llm] ca_bundle / --gigachat-ca-bundle (скачать: https://gu-st.ru/content/lending/russian_trusted_root_ca_pem.crt).
 Те же настройки — в разделе [llm] файла litagent.toml. Проверка связи: python -m litagent check"""),
     "files": ("какие файлы создаются", """\
 library/pdf/<источник>/, library/xml/<источник>/   скачанные статьи по папкам сайтов-источников (openalex, pubmed, имя вашего сайта…)
