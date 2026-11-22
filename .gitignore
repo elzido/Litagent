@@ -2,4 +2,4 @@ litagent.toml
 library/.http_cache/
 litagent/__pycache__/
 tests/__pycache__/
-
+library/
