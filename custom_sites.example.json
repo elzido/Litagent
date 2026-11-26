@@ -41,10 +41,15 @@
         "doi": "doi",
         "abstract": "abstract",
         "pdf_url": "links.pdf",
-        "url": "url"
+        "url": "url",
+        "keywords": "keywords"
       },
-      "notes": "ПЛЕЙСХОЛДЕР: синтаксис, лимиты, подводные камни",
-      "enabled": false
+      "notes": "ПЛЕЙСХОЛДЕР: синтаксис, лимиты, подводные камни. supp_flag/supp_path/supp_url+id_param — откуда брать доп. материалы (необязательно)",
+      "enabled": false,
+      "supp_flag": "hasSuppl",
+      "supp_path": "supplementaryFiles[].url",
+      "supp_url": "https://api.example.org/v1/articles/{id}/supplements.zip",
+      "id_param": "id"
     }
   ]
 }

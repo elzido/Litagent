@@ -18,7 +18,7 @@
   --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace;
 }
 *{box-sizing:border-box}
-html,body{margin:0;padding:0}
+html,body{margin:0;padding:0;color-scheme:dark}
 body{background:var(--bg0);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   background-image:radial-gradient(1100px 500px at 85% -10%,rgba(226,176,74,.05),transparent 60%),
                    radial-gradient(900px 600px at -10% 110%,rgba(143,184,232,.04),transparent 55%);}
@@ -55,12 +55,12 @@ nav button.active{background:var(--accent-soft);border-color:rgba(226,176,74,.3)
 .chip.on .dot{background:var(--ok);box-shadow:0 0 8px rgba(127,201,143,.6)}
 .chip.off .dot{background:var(--bad)}
 /* ---------- основная область ---------- */
-#main{flex:1;min-width:0;padding:30px 36px 70px;max-width:1280px}
+#main{flex:1;min-width:0;padding:clamp(16px,2.6vw,30px) clamp(14px,3vw,36px) 70px;max-width:1280px;width:100%}
 .page{display:none;animation:pageIn .28s var(--ease)}
 .page.active{display:block}
 @keyframes pageIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .page>header{margin-bottom:22px}
-.page h1{margin:0 0 5px;font-size:27px}
+.page h1{margin:0 0 5px;font-size:clamp(21px,2.3vw,27px)}
 .page .sub{color:var(--muted);font-size:13.5px;margin:0}
 .panel{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin-bottom:18px}
 .panel h2{margin:0 0 14px;font-size:18px}
@@ -86,6 +86,12 @@ input[type=text],input[type=number],input[type=password],input[type=email],texta
 textarea{resize:vertical;min-height:74px}
 input:focus,textarea:focus,select:focus{outline:none;border-color:rgba(226,176,74,.6);box-shadow:0 0 0 3px rgba(226,176,74,.12)}
 input::placeholder,textarea::placeholder{color:var(--dim)}
+/* стрелки спиннеров (числа: год, лимиты…) и шеврон select — тусклые, не белые */
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{opacity:.4}
+input[type=number]:hover::-webkit-inner-spin-button,input[type=number]:focus::-webkit-inner-spin-button{opacity:.7}
+select{appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
 .env-badge{font-size:10.5px;background:var(--info-bg);color:var(--info);border-radius:999px;padding:1px 8px;font-weight:500}
 .pw-wrap{position:relative}
 .pw-wrap input{padding-right:38px}
@@ -100,6 +106,8 @@ input::placeholder,textarea::placeholder{color:var(--dim)}
 .tchip.on{background:var(--accent-soft);border-color:rgba(226,176,74,.55);color:var(--accent);
   box-shadow:0 0 14px rgba(226,176,74,.12)}
 .tchip .mark{font-size:10.5px;opacity:.7;margin-left:5px}
+.field.disabled-field .fname{opacity:.45}
+.field.disabled-field input{opacity:.45;cursor:not-allowed}
 /* ---------- кнопки ---------- */
 .btn{display:inline-flex;align-items:center;gap:8px;border-radius:10px;border:1px solid var(--line2);background:var(--bg2);
   padding:9px 18px;cursor:pointer;font-weight:600;font-size:14px;
@@ -170,7 +178,7 @@ tbody tr:hover{background:rgba(226,176,74,.035)}
 tbody tr:last-child td{border-bottom:none}
 .rt{font-weight:600;line-height:1.4}
 .ra{color:var(--muted);font-size:12px;margin-top:2px}
-.src-tag{display:inline-block;font-size:11px;background:var(--bg3);border-radius:6px;padding:1px 7px;margin:1px 2px 1px 0;color:var(--muted)}
+.src-tag{display:inline-block;font-size:11.5px;font-weight:700;background:var(--bg3);border-radius:7px;padding:2px 9px;margin:1px 2px 1px 0;color:var(--muted);white-space:nowrap}
 .st{font-size:11.5px;font-weight:700;border-radius:7px;padding:2px 9px;white-space:nowrap}
 .st.ok{background:var(--ok-bg);color:var(--ok)}
 .st.info{background:var(--info-bg);color:var(--info)}
@@ -179,7 +187,7 @@ tbody tr:last-child td{border-bottom:none}
 .st.mute{background:var(--bg3);color:var(--dim)}
 .num{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* ---------- карточки ---------- */
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr));gap:14px;align-items:start;grid-auto-flow:row dense}
 .card{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;
   transition:border-color .18s var(--ease),transform .18s var(--ease),box-shadow .18s var(--ease)}
 .card:hover{border-color:var(--line2);transform:translateY(-2px);box-shadow:0 6px 22px rgba(0,0,0,.25)}
@@ -193,8 +201,8 @@ tbody tr:last-child td{border-bottom:none}
 .empty{color:var(--dim);text-align:center;padding:38px 20px;font-size:14px}
 .empty code{background:var(--bg2);border-radius:6px;padding:2px 8px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
 .toolbar{display:flex;gap:11px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
-.toolbar input[type=text]{max-width:340px}
-.toolbar select{width:auto;max-width:220px}
+.toolbar input[type=text]{width:min(340px,100%);min-width:150px}
+.toolbar select{width:auto;max-width:min(220px,100%)}
 /* ---------- запуски ---------- */
 .run-row{display:flex;align-items:center;gap:14px;padding:13px 16px;border:1px solid var(--line);border-radius:11px;
   background:var(--bg1);cursor:pointer;margin-bottom:9px;transition:all .17s var(--ease)}
@@ -227,6 +235,7 @@ details.adv summary:hover{color:var(--text)}
   padding:11px 16px;font-size:13.5px;box-shadow:0 8px 28px rgba(0,0,0,.4);animation:toastIn .25s var(--ease)}
 .toast.ok{border-left-color:var(--ok)}
 .toast.bad{border-left-color:var(--bad)}
+.toast.info{border-left-color:var(--info)}
 .toast.out{animation:toastOut .25s var(--ease) forwards}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 @keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
@@ -254,6 +263,10 @@ details.adv summary:hover{color:var(--text)}
 .tag-input{width:110px;padding:2px 9px;font-size:11.5px;border-radius:999px;background:var(--bg0);
   border:1px solid rgba(127,212,193,.55);color:var(--text)}
 .tag-input:focus{outline:none;box-shadow:0 0 0 3px rgba(127,212,193,.12)}
+.tagchip.sel{border-color:rgba(127,212,193,.65);box-shadow:0 0 10px rgba(127,212,193,.15)}
+.tag-toggle{background:none;border:none;color:var(--dim);cursor:pointer;font-size:11.5px;padding:2px 8px;
+  border-radius:999px;border:1px dashed var(--line2);transition:all .15s var(--ease);white-space:nowrap}
+.tag-toggle:hover{color:var(--teal);border-color:rgba(127,212,193,.5)}
 .lib-check{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin-top:2px;flex:none;cursor:pointer;
   background:var(--bg0);border:2px solid var(--line2);border-radius:6px;position:relative;
   transition:background .18s var(--ease),border-color .18s var(--ease),box-shadow .18s var(--ease),transform .18s var(--ease)}
@@ -271,12 +284,54 @@ details.adv summary:hover{color:var(--text)}
 .card .del-article:hover{color:var(--bad);background:var(--bad-bg);transform:scale(1.1)}
 .card .del-article:active{transform:scale(.95)}
 .selbar{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:13px;
+  flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 24px);
   background:var(--bg2);border:1px solid rgba(226,176,74,.45);border-radius:12px;padding:10px 18px;z-index:40;
   box-shadow:0 8px 30px rgba(0,0,0,.45),0 0 22px rgba(226,176,74,.09);animation:pageIn .22s var(--ease)}
 .selbar .sc{font-size:13.5px;font-weight:600;white-space:nowrap}
-#lib-tags{margin-bottom:14px}
-#lib-tags .tchip{font-size:12px;padding:4px 12px}
+/* ---------- карточка: единый размер в свёрнутом виде ---------- */
+.card{padding:13px 15px}
+.card:not(.open):not(.tagexp){display:flex;flex-direction:column;height:216px;overflow:hidden}
+.card:not(.open):not(.tagexp) .actions{margin-top:auto}
+.card:not(.open):not(.tagexp) .tagrow{flex-wrap:nowrap;overflow:hidden}
+.metarow{display:flex;gap:6px;align-items:flex-start;flex-wrap:nowrap}
+.mchips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0;flex:1 1 auto;max-height:46px;overflow:hidden}
+.metarow .expand{flex:none;margin-left:auto}
+.card:not(.open) .tagrow .tag-toggle{flex:none}
+.card:not(.open) .tagline{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;display:flex;gap:6px}
+.actions .cited{margin-left:auto}
+.card .ct{font-size:13.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card .cm{font-size:12px;margin-bottom:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fold.collapsed{display:none}
+.fold:not(.collapsed){border-top:1px dashed var(--line);margin-top:10px;padding-top:10px}
+.expand{margin-left:auto;background:none;border:1px dashed var(--line2);border-radius:8px;color:var(--muted);
+  font-size:11.5px;padding:3px 10px;cursor:pointer;white-space:nowrap;transition:all .15s var(--ease)}
+.expand:hover{color:var(--teal);border-color:rgba(127,212,193,.5)}
+.card.open{grid-column:1/-1}
+.card.open .ct{-webkit-line-clamp:unset;font-size:14.5px}
+.card .ca{max-height:9em}
+/* ---------- доп. материалы ---------- */
+.supps{display:flex;flex-direction:column;gap:6px;margin-top:9px}
+.supps .sh{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+.supps .sh b{color:var(--teal);font-size:12px}
+.supp-item{display:flex;align-items:center;gap:8px;font-size:12.5px;background:var(--bg0);border:1px solid var(--line);
+  border-radius:8px;padding:5px 9px}
+.supp-item .sn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.supp-item a{color:var(--teal);font-weight:600;flex:none}
+.supp-item .sz{color:var(--dim);font-size:11px;flex:none}
+.supp-del{background:none;border:none;color:var(--dim);cursor:pointer;padding:2px 4px;border-radius:6px;line-height:0;
+  transition:all .15s var(--ease);flex:none}
+.supp-del:hover{color:var(--bad);background:var(--bad-bg)}
+.supp-tools{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px;align-items:center}
+.supp-url{flex:1;min-width:140px;padding:5px 10px;font-size:12.5px;border-radius:8px;background:var(--bg0);
+  border:1px solid var(--line2);color:var(--text)}
+.supp-url:focus{outline:none;border-color:rgba(127,212,193,.55);box-shadow:0 0 0 3px rgba(127,212,193,.12)}
+#lib-tags{margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
+.tagscroll{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;flex:1;min-width:0;overflow-x:auto;
+  padding-bottom:6px;scrollbar-width:thin}
+#lib-tags.open .tagscroll{flex-wrap:wrap;overflow:visible}
+#lib-tags .tchip{font-size:12px;padding:4px 11px;white-space:nowrap;flex:none}
 #lib-tags .tchip .cnt{opacity:.6;margin-left:5px;font-size:10.5px}
+#lib-tags .tag-add-btn{white-space:nowrap;flex:none}
 .site-err{background:var(--bad-bg);border:1px solid rgba(224,133,133,.35);border-radius:10px;padding:10px 15px;
   font-size:13px;color:var(--bad);margin-bottom:14px}
 .site-err ul{margin:4px 0 0;padding-left:18px}
@@ -285,14 +340,27 @@ details.adv summary:hover{color:var(--text)}
 .probe-out .pk{color:var(--teal);font-family:var(--mono);font-size:12px}
 code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border-radius:8px;padding:8px 11px;
   font:11.5px/1.6 var(--mono);color:var(--muted);overflow-x:auto;white-space:pre;margin-top:9px}
+.selbar{bottom:max(18px,env(safe-area-inset-bottom))}
 @media(max-width:900px){
   #app{flex-direction:column}
   #sidebar{width:100%;height:auto;position:static;flex-direction:row;align-items:center;flex-wrap:wrap;gap:10px;padding:12px 14px}
   nav{flex-direction:row;flex-wrap:wrap}
   nav button{padding:7px 11px}
   nav button .nl{display:none}
-  .side-foot{display:none}
-  #main{padding:20px 16px 60px}
+  .side-foot{flex-direction:row;flex-wrap:wrap}
+  #main{padding:18px 14px 60px}
+}
+@media(max-width:560px){
+  .cards{grid-template-columns:1fr;gap:11px}
+  .card{padding:11px 12px}
+  .toolbar{gap:8px}
+  .toolbar input[type=text],.toolbar select{width:100%;max-width:none}
+  .expand{margin-left:0}
+  .card .actions{gap:6px}
+  .card .actions .btn.small{flex:1 1 auto;justify-content:center}
+  .supp-tools .supp-url{min-width:100%}
+  .supp-tools .btn{flex:1 1 auto;justify-content:center}
+  #toasts{left:12px;right:12px;max-width:none}
 }
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
@@ -365,6 +433,9 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
             <button class="tchip" data-flag="pdf_only">только с PDF</button>
             <button class="tchip" data-flag="title_only">только названия</button>
             <button class="tchip" data-flag="strict">строго все группы</button>
+            <button class="tchip" data-flag="supplements" title="Скачать также доп. материалы (приложения, данные, медиа) в supp/">доп. материалы</button>
+            <button class="tchip" data-flag="auto_tags" title="Проставить скачанным статьям теги по их ключевым словам">авто-теги</button>
+            <button class="tchip" data-flag="unlimited" title="Скачать все найденные статьи без потолка (как --max-downloads 0)">скачать всё (без лимита)</button>
             <button class="tchip" data-flag="no_download">только найти</button>
             <button class="tchip" data-flag="no_pmc">без PMC</button>
             <button class="tchip" data-flag="flat">без папок источников</button>
@@ -412,6 +483,9 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
             <button class="tchip" data-flag="pdf_only">только с PDF</button>
             <button class="tchip" data-flag="title_only">только названия</button>
             <button class="tchip" data-flag="strict">строго все группы</button>
+            <button class="tchip" data-flag="supplements" title="Скачать также доп. материалы (приложения, данные, медиа) в supp/">доп. материалы</button>
+            <button class="tchip" data-flag="auto_tags" title="Проставить скачанным статьям теги по их ключевым словам">авто-теги</button>
+            <button class="tchip" data-flag="unlimited" title="Скачать все найденные статьи без потолка (как --max-downloads 0)">скачать всё (без лимита)</button>
             <button class="tchip" data-flag="no_download">только найти</button>
             <button class="tchip" data-flag="llm_filter">фильтр релевантности LLM</button>
             <button class="tchip" data-flag="no_llm">без LLM (эвристика)</button>
@@ -447,11 +521,19 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
       <div class="stat-chips" id="lib-stats"></div>
       <div class="toolbar" style="margin-bottom:16px">
         <button class="btn small" id="lib-clear-cache">Очистить HTTP-кэш</button>
+        <button class="btn small" id="lib-autotags" title="Проставить теги по ключевым словам всем статьям без тегов">⚙ Авто-теги немеченым</button>
         <span class="hint" style="margin:0">кэш ответов источников (.http_cache) — после очистки повторные запросы снова идут в сеть; статьи и запуски не трогаются</span>
       </div>
       <div class="toolbar">
         <input type="text" id="lib-q" placeholder="Фильтр: название, автор, DOI, тег…">
         <select id="lib-source"><option value="">все источники</option></select>
+        <select id="lib-supp" title="Фильтр по наличию дополнительных материалов">
+          <option value="">доп. материалы: все</option><option value="have">📎 есть</option><option value="none">📎 нет</option></select>
+        <select id="lib-sort" title="Сортировка списка статей">
+          <option value="year">сначала новые</option><option value="old">сначала старые</option>
+          <option value="cited">по цитированиям</option>
+          <option value="score">по оценке релевантности</option><option value="title">по названию (А→Я)</option></select>
+        <button class="btn small ghost" id="lib-citations" title="Загрузить число цитирований из OpenAlex для статей, где оно неизвестно (по DOI)">цитирования</button>
         <label class="hint" style="display:flex;align-items:center;gap:7px;margin:0;cursor:pointer;font-size:13px">
           <input type="checkbox" id="lib-sel-all" class="lib-check" style="margin-top:0"> выбрать все</label>
         <span class="hint" id="lib-count" style="margin:0"></span>
@@ -587,6 +669,18 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
             <label class="field"><span class="fname">Журнал</span><input type="text" name="fields.venue" placeholder="journal.title"></label>
             <label class="field"><span class="fname">Признак OA</span><input type="text" name="fields.is_oa" placeholder="is_oa"></label>
             <label class="field"><span class="fname">Цитирования</span><input type="text" name="fields.cited_by" placeholder="cited_by_count"></label>
+            <label class="field"><span class="fname">Ключевые слова (для авто-тегов)</span><input type="text" name="fields.keywords" placeholder="keywords / keywordList.keyword"></label>
+          </div>
+
+          <h3>Доп. материалы (необязательно)</h3>
+          <div class="grid g2">
+            <label class="field"><span class="fname">Поле-признак «есть доп. материалы»</span><input type="text" name="supp_flag" placeholder="hasSuppl / isSupplemented">
+              <span class="fhelp">по нему карточка статьи покажет кнопку «докачать»</span></label>
+            <label class="field"><span class="fname">Поле со ссылками на файлы</span><input type="text" name="supp_path" placeholder="supplementaryFiles[].url">
+              <span class="fhelp">список или строка с URL (zip/tgz распаковываются)</span></label>
+            <label class="field"><span class="fname">Шаблон ссылки на пакет</span><input type="text" name="supp_url" placeholder="https://site.org/{id}/supp.zip">
+              <span class="fhelp">{id} — поле ниже, {doi} — DOI статьи</span></label>
+            <label class="field"><span class="fname">Поле с id для шаблона</span><input type="text" name="id_param" placeholder="pmcid / articleId"></label>
           </div>
 
           <h3>Пометки и режим</h3>
@@ -631,6 +725,12 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
           <div style="margin-top:12px">
             <div class="togglerow"><div><div class="tl">Только статьи с PDF</div><div class="td">pdf_only — как --pdf-only, проверка скачиванием</div></div>
               <label class="switch"><input type="checkbox" name="pdf_only"><span class="track"></span></label></div>
+            <div class="togglerow"><div><div class="tl">Доп. материалы статей</div><div class="td">supplements — качать приложения/данные в supp/ (PMC, Europe PMC)</div></div>
+              <label class="switch"><input type="checkbox" name="supplements"><span class="track"></span></label></div>
+            <div class="togglerow"><div><div class="tl">Авто-теги по ключевым словам</div><div class="td">auto_tags — скачанным статьям проставлять теги из keywords/заголовка (ручные не перетираются)</div></div>
+              <label class="switch"><input type="checkbox" name="auto_tags"><span class="track"></span></label></div>
+            <div class="togglerow"><div><div class="tl">Автопроверка доп. материалов</div><div class="td">auto_supp_check — при скачивании определять наличие приложений (Europe PMC hasSuppl, пакетно)</div></div>
+              <label class="switch"><input type="checkbox" name="auto_supp_check"><span class="track"></span></label></div>
             <div class="togglerow"><div><div class="tl">PubMed ищет и в PMC</div><div class="td">pubmed_pmc — OA-PDF через официальный OA Web Service</div></div>
               <label class="switch"><input type="checkbox" name="pubmed_pmc"><span class="track"></span></label></div>
             <div class="togglerow"><div><div class="tl">Папки источников</div><div class="td">folders_by_source — pdf/&lt;источник&gt;/</div></div>
@@ -719,7 +819,7 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let S=null, CFG=null, curJob=null, jobSince=0, jobTimer=null, jobStart=null;
-let libData=null, libShown=60, libSel=new Set(), libTagSel=new Set(), tagInputPk=null;
+let libData=null, libShown=60, libSel=new Set(), libTagSel=new Set(), tagInputPk=null, libOpen=new Set(), libTagsOpen=false, tagOpen=new Set();
 
 async function api(path,opts={}){
   const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
@@ -792,8 +892,25 @@ $("#mode-seg").addEventListener("click",e=>{
   $("#form-auto").style.display=mode==="auto"?"":"none";
 });
 $$("#m-flags,#a-flags").forEach(c=>c.addEventListener("click",e=>{
-  const b=e.target.closest(".tchip");if(b)b.classList.toggle("on");
+  const b=e.target.closest(".tchip");
+  if(!b)return;
+  b.classList.toggle("on");
+  syncUnlimited(c.id);
 }));
+function syncUnlimited(cid){
+  const pref=cid==="m-flags"?"m":"a";
+  const chip=$("#"+cid+" [data-flag='unlimited']");
+  const on=!!(chip&&chip.classList.contains("on"));
+  ["#"+pref+"-max-downloads","#"+pref+"-count"].forEach(id=>{
+    const el=$(id);if(!el)return;
+    el.disabled=on;
+    const fld=el.closest(".field")||el.parentElement;
+    if(fld)fld.classList.toggle("disabled-field",on);
+    if(on)el.value="";
+  });
+  const nd=$("#"+cid+" [data-flag='no_download']");
+  if(on&&nd&&nd.classList.contains("on"))nd.classList.remove("on");
+}
 async function loadSearch(){
   await refreshState();
   $("#search-warn").innerHTML=S.email?"":'<div class="warn-banner">Не задан контактный e-mail — реальные запросы не отправятся. Укажите его в <a href="#config" onclick="showPage(\'config\');return false">конфиге</a>.</div>';
@@ -929,19 +1046,41 @@ function resultsTable(rows){
 
 /* ---------- библиотека ---------- */
 async function loadLibrary(){
-  libData=await api("/api/library");libShown=60;
+  const sort=$("#lib-sort")?$("#lib-sort").value:"year";
+  libData=await api("/api/library?sort="+encodeURIComponent(sort));libShown=60;
   $("#lib-root").textContent=libData.root;
   const st=libData.stats;
   $("#lib-stats").innerHTML=
     `<div class="stat"><b>${st.pdf}</b>PDF</div><div class="stat"><b>${st.xml}</b>XML</div>
-     <div class="stat"><b>${mb(st.articles_bytes)}</b>статьи</div><div class="stat"><b>${st.indexed}</b>в индексе</div>
-     <div class="stat"><b>${st.runs}</b>запусков</div><div class="stat"><b>${mb(st.cache_bytes)}</b>HTTP-кэш</div>`;
+     <div class="stat"><b>${mb(st.articles_bytes)}</b>статьи</div>
+     ${st.supp?`<div class="stat"><b>${st.supp}</b>доп. файлов (${mb(st.supp_bytes)})</div>`:""}
+     <div class="stat"><b>${st.indexed}</b>в индексе</div>
+     <div class="stat"><b>${st.runs}</b>запусков</div><div class="stat"><b>${mb(st.cache_bytes)}</b>HTTP-кэш</div>`+
+     (st.orphans?`<div class="stat" title="Файлы на диске без записей в индексе — библиотек вернёт их при следующем обновлении (или кнопкой ниже)" style="border-color:rgba(224,133,133,.5)"><b>${st.orphans}</b>без индекса</div>`:"");
   const srcs=[...new Set(libData.records.flatMap(r=>r.sources||[]))].sort();
   const sel=$("#lib-source"),cur=sel.value;
   sel.innerHTML='<option value="">все источники</option>'+srcs.map(s=>`<option>${esc(s)}</option>`).join("");
   sel.value=cur;
   renderTagFilter();
   renderLibrary();
+  autoScanSupps();
+}
+let suppScanBusy=false;
+async function autoScanSupps(){
+  if(suppScanBusy)return;
+  if(!libData.records.some(r=>r.has_file&&r.has_supp==null&&(r.pmcid||(r.supp_urls||[]).length)))return;
+  suppScanBusy=true;
+  try{
+    let rounds=0;
+    while(rounds++<4){
+      const r=await api("/api/library/supplements/scan",{method:"POST",body:JSON.stringify({limit:12})});
+      let hit=0;
+      for(const [pk,v] of Object.entries(r.supp||{})){const rec=libData.records.find(x=>x.pk===pk);if(rec){rec.has_supp=v;if(v)hit++;}}
+      if(hit)renderLibrary();
+      if(!r.more)break;
+    }
+  }catch(e){/* автопроверка не должна мешать: руки — кнопка «проверить наличие» */}
+  finally{suppScanBusy=false;}
 }
 function renderTagFilter(){
   const tags=libData.all_tags||[];
@@ -950,21 +1089,41 @@ function renderTagFilter(){
   libData.records.forEach(r=>(r.tags||[]).forEach(t=>counts[t]=(counts[t]||0)+1));
   const c=$("#lib-tags");
   c.style.display=tags.length?"":"none";
-  c.innerHTML=tags.map(t=>`<button type="button" class="tchip${libTagSel.has(t)?" on":""}" data-libtag="${esc(t)}">${esc(t)}<span class="cnt">${counts[t]||0}</span></button>`).join("");
+  const sorted=[...tags].sort((a,b)=>(counts[b]||0)-(counts[a]||0)||a.localeCompare(b,"ru"));
+  const top=sorted.slice(0,6);
+  const vis=libTagsOpen?sorted:[...top,...[...libTagSel].filter(t=>!top.includes(t))];
+  const chip=t=>`<button type="button" class="tchip${libTagSel.has(t)?" on":""}" data-libtag="${esc(t)}">${esc(t)}<span class="cnt">${counts[t]||0}</span></button>`;
+  c.classList.toggle("open",libTagsOpen);
+  let h=`<span class="tagscroll">`+vis.map(chip).join("")+`</span>`;
+  if(sorted.length>top.length)h+=`<button type="button" class="tag-add-btn" data-tagmore title="Показать все теги">${libTagsOpen?"▲ свернуть":`▼ ещё ${sorted.length-vis.length}`}</button>`;
+  c.innerHTML=h;
+  if(!libTagsOpen){const sc=c.querySelector(".tagscroll");if(sc)sc.scrollLeft=0;}
 }
 function libFiltered(){
   const q=$("#lib-q").value.trim().toLowerCase();
   const src=$("#lib-source").value;
-  return libData.records.filter(r=>{
+  const sf=$("#lib-supp").value;
+  const rows=libData.records.filter(r=>{
     if(src&&!(r.sources||[]).includes(src))return false;
+    if(sf==="have"&&!((r.supp||[]).length||r.has_supp===true))return false;
+    if(sf==="none"&&((r.supp||[]).length||r.has_supp!==false))return false;
     if(libTagSel.size&&!(r.tags||[]).some(t=>libTagSel.has(t)))return false;
     if(!q)return true;
     return [r.title,(r.authors||[]).join(" "),r.doi,r.pmid,r.arxiv_id,String(r.year||""),(r.tags||[]).join(" ")].join(" ").toLowerCase().includes(q);
   });
+  const mode=$("#lib-sort").value;
+  if(mode==="cited")rows.sort((a,b)=>((b.cited_by??-1)-(a.cited_by??-1))||(b.year||0)-(a.year||0));
+  else if(mode==="old")rows.sort((a,b)=>(a.year||0)-(b.year||0)||String(a.title||"").localeCompare(String(b.title||""),"ru"));
+  else if(mode==="score")rows.sort((a,b)=>((b.score??-1)-(a.score??-1))||((b.cited_by??-1)-(a.cited_by??-1)));
+  else if(mode==="title")rows.sort((a,b)=>String(a.title||"").localeCompare(String(b.title||""),"ru"));
+  else if(mode==="year")rows.sort((a,b)=>(b.year||0)-(a.year||0)||String(a.title||"").localeCompare(String(b.title||""),"ru"));
+  return rows;
 }
 function renderLibrary(){
   const rows=libFiltered();
-  $("#lib-count").textContent=`показано ${Math.min(libShown,rows.length)} из ${rows.length}`;
+  let cnt=`показано ${Math.min(libShown,rows.length)} из ${rows.length}`;
+  if($("#lib-sort").value==="cited"&&!rows.some(r=>r.cited_by!=null))cnt+=` · цитирования неизвестны — нажмите «цитирования»`;
+  $("#lib-count").textContent=cnt;
   $("#lib-more").style.display=rows.length>libShown?"":"none";
   $("#lib-sel-all").checked=rows.length>0&&rows.every(r=>libSel.has(r.pk));
   $("#lib-selbar").style.display=libSel.size?"":"none";
@@ -972,26 +1131,67 @@ function renderLibrary(){
   if(!rows.length){$("#lib-list").innerHTML='<div class="empty" style="grid-column:1/-1">Пока пусто. Запустите поиск — скачанные статьи появятся здесь.<br><br><code>python -m litagent manual -q "graph neural networks" -n 10</code></div>';return;}
   $("#lib-list").innerHTML=rows.slice(0,libShown).map(r=>{
     const sel=libSel.has(r.pk);
+    const open=libOpen.has(r.pk);
     const srcs=(r.sources||[]).map(s=>`<span class="src-tag">${esc(s)}</span>`).join("");
     const links=[];
     if(r.doi)links.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">DOI</a>`);
     if(r.url)links.push(`<a href="${esc(r.url)}" target="_blank" rel="noopener">страница</a>`);
-    const tags=(r.tags||[]).map(t=>`<span class="tagchip">${esc(t)}<button type="button" data-tag-remove data-pk="${esc(r.pk)}" data-tag="${esc(t)}" title="убрать тег">×</button></span>`).join("");
+    const nSupp=(r.supp||[]).length;
+    const known=r.has_supp===true, unknown=r.has_supp===null&&!!(r.pmcid||(r.supp_urls||[]).length);
+    const badge=nSupp?`<span class="st teal" title="Доп. материалы скачаны: ${nSupp}">📎 доп. ${nSupp}</span>`
+      :known?`<span class="st teal" title="У статьи есть доп. материалы (не скачаны)">📎 доп.</span>`
+      :unknown?`<span class="st mute" title="Наличие доп. материалов не проверялось">📎 ?</span>`:"";
+    const canFold=(r.has_file&&(nSupp||known||unknown))||r.abstract;
+    const more=canFold||open?
+      `<button type="button" class="expand" data-expand data-pk="${esc(r.pk)}" aria-expanded="${open?"true":"false"}">${open?"▲ свернуть":`▼ ${nSupp||known?`доп. материалы${nSupp?` (${nSupp})`:""}`:"подробнее"}`}</button>`:"";
+    const rTags=r.tags||[];
+    const selTags=rTags.filter(t=>libTagSel.has(t));
+    const chip=(t,rem)=>`<span class="tagchip${libTagSel.has(t)?" sel":""}">${esc(t)}${rem?`<button type="button" data-tag-remove data-pk="${esc(r.pk)}" data-tag="${esc(t)}" title="убрать тег">×</button>`:""}</span>`;
     const tagAdd=tagInputPk===r.pk
       ?`<input class="tag-input" data-pk="${esc(r.pk)}" placeholder="тег…" maxlength="80">`
       :`<button type="button" class="tag-add-btn" data-tag-add data-pk="${esc(r.pk)}">+ тег</button>`;
-    return `<div class="card${sel?" selected":""}">
+    const autoTag=`<button type="button" class="tag-add-btn" data-tag-auto data-pk="${esc(r.pk)}" title="Проставить теги по ключевым словам статьи">⚙ авто</button>`;
+    let tagrow;
+    if(tagOpen.has(r.pk)||tagInputPk===r.pk){
+      tagrow=`<div class="tagrow">${rTags.map(t=>chip(t,true)).join("")}${autoTag}${tagAdd}`+
+             `${rTags.length?`<button type="button" class="tag-toggle" data-tag-toggle data-pk="${esc(r.pk)}">▲ свернуть</button>`:""}</div>`;
+    }else{
+      tagrow=(selTags.length||rTags.length)?`<div class="tagrow">`+
+             `${selTags.length?`<span class="tagline">${selTags.map(t=>chip(t,false)).join("")}</span>`:""}`+
+             `${rTags.length?`<button type="button" class="tag-toggle" data-tag-toggle data-pk="${esc(r.pk)}" title="Показать все теги статьи">🏷 ${rTags.length}</button>`:""}</div>`:"";
+    }
+    const supps=(r.supp||[]).map(s=>
+      `<div class="supp-item"><span class="sn" title="${esc(s.name)}">${esc(s.name)}</span>
+        <span class="sz">${mb(s.size||0)}</span>
+        <a href="${fileHref(s.file)}" target="_blank" rel="noopener">открыть</a>
+        <button type="button" class="supp-del" data-supp-del data-pk="${esc(r.pk)}" data-file="${esc(s.file)}" title="удалить файл">×</button></div>`).join("");
+    const suppBlock=r.has_file?
+      `<div class="supps">${nSupp?`<div class="sh">Доп. материалы <b>${nSupp}</b></div>`+supps:`<div class="sh">Дополнительные материалы</div>`}
+        ${known?`<div class="supp-tools"><button type="button" class="btn small" data-supp-fetch data-pk="${esc(r.pk)}" title="Скачать доп. материалы автоматически (источник, PMC, Europe PMC)">↓ докачать доп. материалы</button></div>`:""}
+        ${unknown&&!nSupp?`<div class="supp-tools"><button type="button" class="btn small ghost" data-supp-check data-pk="${esc(r.pk)}" title="Проверить через Europe PMC, есть ли у статьи доп. материалы">проверить наличие</button></div>`:""}
+        ${nSupp||known?`<div class="supp-tools">
+          <input type="text" class="supp-url" data-supp-url-input data-pk="${esc(r.pk)}" placeholder="…или URL файла вручную">
+          <button type="button" class="btn small ghost" data-supp-add data-pk="${esc(r.pk)}" title="Скачать файл доп. материалов по указанному URL">+ URL</button>
+        </div>`:`<div class="supp-tools">
+          <input type="text" class="supp-url" data-supp-url-input data-pk="${esc(r.pk)}" placeholder="URL файла доп. материалов (вручную)">
+          <button type="button" class="btn small ghost" data-supp-add data-pk="${esc(r.pk)}" title="Скачать файл доп. материалов по указанному URL">+ URL</button>
+        </div>`}</div>`:"";
+    const tagexp=tagOpen.has(r.pk)||tagInputPk===r.pk;
+    return `<div class="card${sel?" selected":""}${open?" open":""}${tagexp?" tagexp":""}" data-card="${esc(r.pk)}">
       <div style="display:flex;gap:10px;align-items:flex-start">
         <input type="checkbox" class="lib-check" data-pk="${esc(r.pk)}" ${sel?"checked":""} title="выбрать для удаления">
         <div style="flex:1;min-width:0"><div class="ct">${esc(r.title)}</div>
         <div class="cm">${esc((r.authors||[]).slice(0,3).join(", "))}${r.year?" · "+r.year:""}${r.venue?" · "+esc(r.venue):""}</div></div>
         <button type="button" class="del-article" data-del-article data-pk="${esc(r.pk)}" title="удалить статью">${TRASH_SVG}</button>
       </div>
-      <div>${srcs}${r.is_oa?' <span class="st ok">OA</span>':""}${r.score!=null&&r.score!==""?` <span class="st info">оценка ${esc(Number(r.score).toFixed(0))}</span>`:""}</div>
-      ${r.abstract?`<div class="ca">${esc(r.abstract)}</div>`:""}
-      <div class="tagrow">${tags}${tagAdd}</div>
+      <div class="metarow"><span class="mchips">${srcs}${badge}${r.is_oa?'<span class="st ok">OA</span>':""}${r.score!=null&&r.score!==""?`<span class="st info">оценка ${esc(Number(r.score).toFixed(0))}</span>`:""}</span>${more}</div>
+      ${tagrow}
       <div class="actions">${r.has_file&&r.file?`<a class="btn small primary" href="${fileHref(r.file)}" target="_blank" rel="noopener">${r.file.endsWith(".xml")?"XML":"PDF"}</a>`:'<span class="st mute">файл не скачан</span>'}
-      ${links.join(" ")}</div></div>`;
+      ${links.join(" ")}${r.cited_by!=null?`<span class="st mute cited" title="Цитирований: ${esc(r.cited_by)}">⮕ ${esc(r.cited_by)}</span>`:""}</div>
+      <div class="fold${open?"":" collapsed"}">
+        ${r.abstract?`<div class="ca">${esc(r.abstract)}</div>`:""}
+        ${suppBlock}
+      </div></div>`;
   }).join("");
 }
 async function saveTags(pk,tags){
@@ -1021,10 +1221,37 @@ $("#lib-clear-cache").onclick=async()=>{
     await loadLibrary();
   }catch(e){toast(e.message,"bad");}
 };
+$("#lib-autotags").onclick=async()=>{
+  const btn=$("#lib-autotags");btn.disabled=true;
+  try{
+    const r=await api("/api/library/tags/auto",{method:"POST",body:JSON.stringify({all:true})});
+    toast(r.tagged?`Авто-теги проставлены статьям: ${r.tagged}`:"Все статьи уже помечены тегами","ok");
+    await loadLibrary();
+  }catch(e){toast(e.message,"bad");}
+  finally{btn.disabled=false;}
+};
+$("#lib-citations").onclick=async()=>{
+  const btn=$("#lib-citations");btn.disabled=true;btn.textContent="читаю…";
+  try{
+    let done=0,rounds=0;
+    while(rounds++<5){
+      const r=await api("/api/library/citations",{method:"POST",body:JSON.stringify({limit:100})});
+      done+=r.updated;
+      if(!r.more)break;
+    }
+    await loadLibrary();
+    toast(done?`Цитирования получены для ${done} статей (OpenAlex)`:"OpenAlex не дал цитирований — уже заполнены или DOI не найдены",done?"ok":"info");
+  }catch(e){toast(e.message,"bad");}
+  finally{btn.disabled=false;btn.textContent="цитирования";}
+};
 $("#lib-q").addEventListener("input",()=>{libShown=60;renderLibrary();});
 $("#lib-source").addEventListener("change",()=>{libShown=60;renderLibrary();});
+$("#lib-supp").addEventListener("change",()=>{libShown=60;renderLibrary();});
+$("#lib-sort").addEventListener("change",()=>{libShown=60;renderLibrary();loadLibrary().catch(()=>{});});
 $("#lib-more").onclick=()=>{libShown+=60;renderLibrary();};
 $("#lib-tags").addEventListener("click",e=>{
+  const m=e.target.closest("[data-tagmore]");
+  if(m){libTagsOpen=!libTagsOpen;renderTagFilter();return;}
   const b=e.target.closest("[data-libtag]");if(!b)return;
   const t=b.dataset.libtag;
   libTagSel.has(t)?libTagSel.delete(t):libTagSel.add(t);
@@ -1036,14 +1263,88 @@ $("#lib-sel-all").addEventListener("change",e=>{
 });
 $("#lib-del-sel").onclick=()=>doDelete([...libSel]);
 $("#lib-sel-clear").onclick=()=>{libSel.clear();renderLibrary();};
-$("#lib-list").addEventListener("click",e=>{
+$("#lib-list").addEventListener("click",async e=>{
   const rm=e.target.closest("[data-tag-remove]");
   if(rm){const r=libData.records.find(x=>x.pk===rm.dataset.pk);if(r)saveTags(r.pk,(r.tags||[]).filter(t=>t!==rm.dataset.tag));return;}
   const add=e.target.closest("[data-tag-add]");
   if(add){tagInputPk=add.dataset.pk;renderLibrary();const inp=$("#lib-list .tag-input");if(inp)inp.focus();return;}
+  const tt=e.target.closest("[data-tag-toggle]");
+  if(tt){const pk=tt.dataset.pk;tagOpen.has(pk)?tagOpen.delete(pk):tagOpen.add(pk);renderLibrary();return;}
+  const ex=e.target.closest("[data-expand]");
+  if(ex){const pk=ex.dataset.pk;libOpen.has(pk)?libOpen.delete(pk):libOpen.add(pk);renderLibrary();return;}
+  const at=e.target.closest("[data-tag-auto]");
+  if(at){await autoTags(at.dataset.pk,at);return;}
+  const sc=e.target.closest("[data-supp-check]");
+  if(sc){await suppCheck(sc.dataset.pk,sc);return;}
+  const sf=e.target.closest("[data-supp-fetch]");
+  if(sf){await suppFetch(sf.dataset.pk,sf);return;}
+  const sa=e.target.closest("[data-supp-add]");
+  if(sa){
+    const pk=sa.dataset.pk;
+    const inp=[...document.querySelectorAll("#lib-list [data-supp-url-input]")].find(x=>x.dataset.pk===pk);
+    await suppAddUrl(pk,inp?inp.value.trim():"",sa);return;
+  }
+  const sd=e.target.closest("[data-supp-del]");
+  if(sd){await suppDelete(sd.dataset.pk,sd.dataset.file);return;}
   const del=e.target.closest("[data-del-article]");
   if(del)doDelete([del.dataset.pk]);
 });
+async function autoTags(pk,btn){
+  if(btn)btn.disabled=true;
+  try{
+    const r=await api("/api/library/tags/auto",{method:"POST",body:JSON.stringify({pk})});
+    const rec=libData.records.find(x=>x.pk===pk);if(rec)rec.tags=r.tags;
+    libData.all_tags=r.all_tags;
+    toast(r.tags.length?`Теги по ключевым словам: ${r.tags.join(", ")}`:"Ключевых слов для тегов не нашлось",r.tags.length?"ok":"info");
+    renderTagFilter();renderLibrary();
+  }catch(err){toast(err.message,"bad");}
+  finally{if(btn)btn.disabled=false;}
+}
+async function suppCheck(pk,btn){
+  if(btn){btn.disabled=true;btn.textContent="проверяю…";}
+  try{
+    const r=await api("/api/library/supplements/check",{method:"POST",body:JSON.stringify({pk})});
+    const rec=libData.records.find(x=>x.pk===pk);
+    if(rec)rec.has_supp=r.has_supp;
+    if(r.has_supp)libOpen.add(pk);
+    toast(r.has_supp?"У статьи есть доп. материалы — можно докачать":"У статьи доп. материалов не найдено",r.has_supp?"ok":"info");
+    renderLibrary();
+  }catch(err){
+    toast(err.message,"bad");
+    if(btn){btn.disabled=false;btn.textContent="проверить наличие";}
+  }
+}
+async function suppFetch(pk,btn){
+  if(btn){btn.disabled=true;btn.textContent="качаю…";}
+  try{
+    const r=await api("/api/library/supplements/fetch",{method:"POST",body:JSON.stringify({pk})});
+    const rec=libData.records.find(x=>x.pk===pk);
+    if(rec){rec.supp=r.supp;if(r.has_supp!=null)rec.has_supp=r.has_supp;}
+    if(r.added)libOpen.add(pk);
+    toast(r.added?`Доп. материалы: добавлено файлов — ${r.added}`:"Новых доп. материалов не нашлось.",r.added?"ok":"info");
+    renderLibrary();
+  }catch(err){toast(err.message,"bad");if(btn){btn.disabled=false;btn.textContent="↓ докачать доп. материалы";}}
+}
+async function suppAddUrl(pk,url,btn){
+  if(!url){toast("Вставьте URL файла доп. материалов.","bad");return;}
+  if(!/^https?:\/\//i.test(url)){toast("URL должен начинаться с http:// или https://","bad");return;}
+  if(btn){btn.disabled=true;}
+  try{
+    const r=await api("/api/library/supplements/url",{method:"POST",body:JSON.stringify({pk,url})});
+    const rec=libData.records.find(x=>x.pk===pk);if(rec)rec.supp=r.all;
+    toast(`Добавлен файл: ${r.supp.name}`,"ok");
+    renderLibrary();
+  }catch(err){toast(err.message,"bad");if(btn)btn.disabled=false;}
+}
+async function suppDelete(pk,file){
+  if(!await confirmBox("Удалить доп. материал?","Файл будет удалён с диска. Это необратимо."))return;
+  try{
+    const r=await api("/api/library/supplements/delete",{method:"POST",body:JSON.stringify({pk,file})});
+    const rec=libData.records.find(x=>x.pk===pk);if(rec)rec.supp=r.supp;
+    toast("Доп. материал удалён.","ok");
+    renderLibrary();
+  }catch(err){toast(err.message,"bad");}
+}
 $("#lib-list").addEventListener("change",e=>{
   const chk=e.target.closest(".lib-check");
   if(chk){chk.checked?libSel.add(chk.dataset.pk):libSel.delete(chk.dataset.pk);renderLibrary();}
@@ -1073,9 +1374,12 @@ async function loadRuns(){
   $("#runs-list").innerHTML=d.runs.map(r=>{
     const dl=r.downloads?`PDF ${r.downloads.pdf||0}${r.downloads.exists?` + ${r.downloads.exists} уже есть`:""}`:"без скачивания";
     const sum=r.goal||(r.topics||[]).filter(Boolean).join("; ")||"—";
+    const st=r.status==="interrupted"?'<span class="badge cancelled" title="Запуск был прерван (Ctrl+C / отмена) — сохранены параметры и то, что успело скачаться">прерван</span>'
+      :r.status==="running"&&S.job&&S.job.state==="running"?'<span class="badge running">выполняется</span>':"";
     return `<div class="run-row" data-run="${esc(r.id)}">
       <span class="badge ${esc(r.mode)}">${esc(r.mode)}</span>
       <span class="rid">${fmtRunId(r.id)}</span>
+      ${st}
       <span class="rsum">${esc(sum)}</span>
       <span class="rnum">${r.total_unique??"?"} зап. · ${dl}</span>
       <button type="button" class="run-del" data-del-run="${esc(r.id)}" title="удалить запуск">${TRASH_SVG}</button></div>`;
@@ -1104,12 +1408,27 @@ async function openRun(id){
   const m=run.meta,d=m.downloads||{},http=m.http||{};
   let h=`<div class="meta-grid">
     <div class="meta"><div class="mk">Запуск</div><div class="mv">${fmtRunId(id)}</div></div>
-    <div class="meta"><div class="mk">Режим</div><div class="mv">${esc(m.mode||"?")}</div></div>
+    <div class="meta"><div class="mk">Режим</div><div class="mv">${esc(m.mode||"?")}${m.status==="interrupted"?' <span class="badge cancelled">прерван</span>':""}</div></div>
     <div class="meta"><div class="mk">Уникальных записей</div><div class="mv">${m.total_unique??0}</div></div>
     <div class="meta"><div class="mk">HTTP-запросов</div><div class="mv">${http.requests??"?"}${http.retries?` (повторов ${http.retries})`:""}</div></div>`;
-  if(m.downloads)h+=`<div class="meta"><div class="mk">Скачано</div><div class="mv">PDF ${d.pdf||0}${d.exists?` + ${d.exists} уже есть`:""}${d.xml?`, XML ${d.xml}`:""}</div></div>`;
+  if(m.downloads)h+=`<div class="meta"><div class="mk">Скачано</div><div class="mv">PDF ${d.pdf||0}${d.exists?` + ${d.exists} уже есть`:""}${d.xml?`, XML ${d.xml}`:""}${d.supp?`, доп. ${d.supp}`:""}</div></div>`;
   if(m.target)h+=`<div class="meta"><div class="mk">Цель по PDF</div><div class="mv">${m.target.reached} из ${m.target.requested}</div></div>`;
   h+="</div>";
+  if(m.topics||m.sources||m.flags||m.nums){
+    const FLAGS={"oa_only":"только OA","title_only":"только названия","strict":"строго","pdf_only":"только PDF",
+      "no_download":"только найти","no_pmc":"без PMC","flat":"без папок","supplements":"доп. материалы",
+      "auto_tags":"авто-теги","dry_run":"dry-run","unlimited":"скачать всё"};
+    const nums=(m.nums||{}), nf=["limit","year_from","year_to","count","max_downloads","workers","deepen_rounds"]
+      .filter(k=>nums[k]!==undefined&&nums[k]!==null).map(k=>`${k}=${nums[k]}`).join(" · ");
+    const fl=Object.keys(m.flags||{}).map(k=>FLAGS[k]||k).join(" · ");
+    h+=`<div class="panel"><h2>Параметры поиска</h2><div class="meta-grid">
+      <div class="meta"><div class="mk">Темы</div><div class="mv">${(m.topics||[]).map(t=>`<span class="src-tag">${esc(t)}</span>`).join(" ")||"—"}</div></div>
+      <div class="meta"><div class="mk">Источники</div><div class="mv">${(m.sources||[]).map(s=>`<span class="src-tag">${esc(s)}</span>`).join(" ")||"—"}</div></div>
+      ${fl?`<div class="meta"><div class="mk">Режимы</div><div class="mv">${esc(fl)}</div></div>`:""}
+      ${nf?`<div class="meta"><div class="mk">Числа</div><div class="mv num">${esc(nf)}</div></div>`:""}
+    </div>${m.cli?`<code class="cli">${esc(m.cli)}</code>`:""}
+    ${m.topics&&m.topics.length?`<div class="launch" style="margin-top:10px"><button class="btn small" id="run-repeat">Повторить этот поиск</button></div>`:""}</div>`;
+  }
   if(m.goal)h+=`<div class="panel"><h2>Цель</h2><p style="margin:0">${esc(m.goal)}</p></div>`;
   if(m.rounds&&m.rounds.length){
     h+='<div class="panel"><h2>Раунды плана</h2>'+m.rounds.map(r=>
@@ -1129,6 +1448,19 @@ async function openRun(id){
   }
   h+='<div class="panel"><h2>Найденные записи</h2>'+resultsTable(run.results)+"</div>";
   $("#run-body").innerHTML=h;
+  const rep=$("#run-repeat");
+  if(rep)rep.onclick=()=>{
+    showPage("search");
+    if(m.mode==="auto"&&m.goal)$("#a-goal").value=m.goal;
+    else if(m.topics&&m.topics.length)$("#m-topics").value=m.topics.join("\n");
+    if(m.sources&&m.sources.length)$$(".chips [data-src]").forEach(b=>b.classList.toggle("on",m.sources.includes(b.dataset.src)));
+    const n=m.nums||{};
+    if(n.year_from)$("#m-year-from").value=n.year_from;
+    if(n.year_to)$("#m-year-to").value=n.year_to;
+    if(n.limit)$("#m-limit").value=n.limit;
+    if(n.count)$("#m-count").value=n.count;
+    toast("Параметры запуска подставлены в форму поиска","ok");
+  };
 }
 
 /* ---------- пресеты ---------- */
@@ -1172,7 +1504,7 @@ async function loadSites(){
   $("#sites-custom").innerHTML=d.custom.map(s=>`<div class="card" style="margin-bottom:12px">
     <div style="display:flex;align-items:center;gap:12px">
       <div style="flex:1;min-width:0"><div class="ct">${esc(s.name)}${s.valid?"":' <span class="st bad">описание некорректно</span>'}</div>
-      <div class="cm">${esc(s.title||"")} · ${esc(s.host)} · ${s.query_style==="boolean"?"булевы операторы":"простые слова"}${s.key_env?" · ключ: $"+esc(s.key_env):" · без ключа"}${s.origin?" · из "+esc(s.origin):""}</div></div>
+      <div class="cm">${esc(s.title||"")} · ${esc(s.host)} · ${s.query_style==="boolean"?"булевы операторы":"простые слова"}${s.key_env?" · ключ: $"+esc(s.key_env):" · без ключа"}${s.origin?" · из "+esc(s.origin):""}${(s.supp_flag||s.supp_path||s.supp_url)?' · <span style="color:var(--teal)">доп. материалы настроены</span>':""}</div></div>
       <label class="switch" title="включать автоматически во все запуски"><input type="checkbox" data-site-toggle="${esc(s.name)}" ${s.enabled?"checked":""}><span class="track"></span></label>
     </div>
     ${s.about?`<div class="ca">${esc(s.about)}</div>`:""}
@@ -1201,7 +1533,7 @@ function collectSiteForm(){
     if(i>0)sp[part.slice(0,i).trim()]=part.slice(i+1).trim();
   }
   const fields={};
-  ["title","authors","year","doi","abstract","pdf_url","url","venue","is_oa","cited_by"].forEach(k=>{
+  ["title","authors","year","doi","abstract","pdf_url","url","venue","is_oa","cited_by","keywords"].forEach(k=>{
     const v=val("fields."+k);if(v)fields[k]=v;
   });
   const pad=o=>o?" "+o+" ":" ";
@@ -1216,6 +1548,7 @@ function collectSiteForm(){
     limit_param:val("limit_param"),max_per_request:Number(val("max_per_request"))||100,
     key_env:val("key_env"),key_param:val("key_param"),key_header:val("key_header"),key_prefix:val("key_prefix"),
     min_interval:Number(val("min_interval"))||1,results_path:val("results_path"),total_path:val("total_path"),
+    supp_flag:val("supp_flag"),supp_path:val("supp_path"),supp_url:val("supp_url"),id_param:val("id_param"),
     fields,notes:val("notes"),enabled:val("enabled")};
 }
 function siteFormError(msg){
@@ -1320,7 +1653,8 @@ async function loadConfig(){
   $("#cfg-sources-err").style.display="none";
   const c=d.cfg;
   for(const k of ["email","out","custom_sites","presets_file","limit_per_source","max_downloads","download_workers",
-    "download_timeout","download_retries","cache_ttl","deepen_rounds","deepen_limit_cap","pdf_only","pubmed_pmc","folders_by_source"])cfgSet(k,c[k]);
+    "download_timeout","download_retries","cache_ttl","deepen_rounds","deepen_limit_cap","pdf_only","pubmed_pmc",
+    "folders_by_source","supplements","auto_tags","auto_supp_check"])cfgSet(k,c[k]);
   for(const sec of ["keys","llm","auto","web"])for(const k of Object.keys(c[sec]||{}))cfgSet(`${sec}.${k}`,c[sec][k]);
   sourceChips("#cfg-sources",c.sources||[]);
   $$("#cfg-form .env-badge").forEach(b=>b.remove());

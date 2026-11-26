@@ -12,6 +12,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -26,10 +27,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import cli, presets
 from .customsites import (DEFAULT_FILE as SITES_DEFAULT, CustomSource, Site, SiteRegistry,
                           guess_mapping, name_error)
-from .http import PoliteClient
+from .http import Blocked, HttpError, PoliteClient
 from .llm import GIGACHAT_SCOPES
-from .models import parse_topic
+from .models import Record, norm_doi, parse_topic
 from .policy import Policy
+from .resolve import Downloader
 from .sources import DEFAULT_SOURCES, SOURCE_CLASSES, Ctx
 from .store import Library
 
@@ -96,9 +98,12 @@ COMMENTS = {
     "download_timeout": "сек на файл (простой сокета)",
     "download_retries": "попыток на файл (обычные запросы API: 5)",
     "pdf_only": "true: оставлять только статьи с реально скачанным PDF (как --pdf-only)",
+    "supplements": "true: докачивать доп. материалы статей (приложения, данные) в supp/<статья>/ (как --supplements)",
+    "auto_tags": "true: проставлять скачанным статьям теги по их ключевым словам (как --auto-tags; ручные теги не перетираются)",
+    "auto_supp_check": "true: при скачивании автоматически определять наличие доп. материалов (пакетный Europe PMC hasSuppl) — по умолчанию включено",
     "pubmed_pmc": "PubMed ищет ещё и в PMC и качает оттуда OA-PDF (false — выключить)",
     "custom_sites": "свои сайты (создаётся командой `sites add`)",
-    "max_downloads": "потолок успешных скачиваний за запуск (--max-downloads)",
+    "max_downloads": "потолок успешных скачиваний за запуск (--max-downloads; 0 — без потолка: качать все найденные)",
     "folders_by_source": "раскладывать файлы по папкам источников: pdf/<источник>/",
     "presets_file": "пресеты ручного режима (manual --save-preset / --preset)",
     "deepen_rounds": "при --count N: сколько раз углублять поиск, если N PDF ещё не набрано",
@@ -246,8 +251,9 @@ def validate_config(data: dict, known_sources: list[str], base: dict | None = No
 
 # ---------------------------------------------------------------- фоновые задачи (запуски CLI)
 class Job:
-    def __init__(self, jid: str, kind: str, argv: list[str], title: str):
+    def __init__(self, jid: str, kind: str, argv: list[str], title: str, params: dict | None = None):
         self.id, self.kind, self.argv, self.title = jid, kind, argv, title
+        self.params = params or {}                       # форма запуска: пишется в run.json при старте CLI
         self.started = datetime.datetime.now().isoformat(timespec="seconds")
         self.finished: str | None = None
         self.state = "running"                     # running | done | error | cancelled
@@ -272,11 +278,11 @@ class JobManager:
         self.current: Job | None = None
         self.history: list[Job] = []
 
-    def start(self, kind: str, argv: list[str], title: str) -> Job:
+    def start(self, kind: str, argv: list[str], title: str, params: dict | None = None) -> Job:
         with self.lock:
             if self.current and self.current.state == "running":
                 raise ApiError(409, f"Уже идёт задача «{self.current.title}» — дождитесь окончания или отмените её.")
-            job = Job(datetime.datetime.now().strftime("%H%M%S-") + str(len(self.history)), kind, argv, title)
+            job = Job(datetime.datetime.now().strftime("%H%M%S-") + str(len(self.history)), kind, argv, title, params)
             self.current = job
             self.history.append(job)
             self.history = self.history[-30:]
@@ -284,9 +290,12 @@ class JobManager:
         return job
 
     def _run(self, job: Job) -> None:
+        env = dict(os.environ)
+        if job.params:                                 # форма поиска -> run.json CLI-процесса (даже при отмене)
+            env["LITAGENT_WEB_PARAMS"] = json.dumps(job.params, ensure_ascii=False)
         try:
             proc = subprocess.Popen(job.argv, cwd=self.cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, encoding="utf-8", errors="replace")
+                                    text=True, encoding="utf-8", errors="replace", env=env)
         except OSError as e:
             with self.lock:
                 job.lines.append(f"Не удалось запустить: {e}")
@@ -348,7 +357,8 @@ class JobManager:
 
 # ---------------------------------------------------------------- аргументы CLI из формы поиска
 FLAGS = {"oa_only": "--oa-only", "title_only": "--title-only", "strict": "--strict", "pdf_only": "--pdf-only",
-         "no_download": "--no-download", "no_pmc": "--no-pmc", "flat": "--flat", "dry_run": "--dry-run"}
+         "no_download": "--no-download", "no_pmc": "--no-pmc", "flat": "--flat", "dry_run": "--dry-run",
+         "supplements": "--supplements", "auto_tags": "--auto-tags"}
 NUMS = {"year_from": "--year-from", "year_to": "--year-to", "limit": "--limit", "count": "--count",
         "max_downloads": "--max-downloads", "workers": "--workers", "deepen_rounds": "--deepen-rounds"}
 
@@ -384,6 +394,12 @@ def _common_argv(p: dict, known: list[str], forbidden: dict) -> list[str]:
             if key in ("limit", "workers", "max_downloads", "deepen_rounds") and n < 0:
                 raise ApiError(400, f"«{key}» не может быть отрицательным.")
             argv += [flag, str(n)]
+    if p.get("unlimited"):
+        if p.get("no_download"):
+            raise ApiError(400, "«Скачать всё» противоречит «только найти».")
+        if _int_opt(p, "max_downloads") is not None or _int_opt(p, "count") is not None:
+            raise ApiError(400, "«Скачать всё» не сочетается с «Макс. скачиваний» или «Скачать ровно N PDF».")
+        argv += ["--max-downloads", "0"]
     for key, flag in FLAGS.items():
         if p.get(key):
             argv.append(flag)
@@ -452,6 +468,19 @@ def build_search_argv(p: dict, cfg: dict, known: list[str], forbidden: dict, con
     raise ApiError(400, f"Неизвестный режим: {mode}")
 
 
+def web_search_params(p: dict, argv: list[str]) -> dict:
+    """Параметры запуска из формы поиска — пишутся в run.json CLI-процесса (через окружение)."""
+    out = {"mode": p.get("mode") or "manual", "cli": "python -m litagent " + " ".join(shlex.quote(x) for x in argv)}
+    for k in ("topics", "preset", "group", "exclude", "arxiv_cats", "sources", "goal", "min_score"):
+        if p.get(k):
+            out[k] = p[k]
+    for k in ("year_from", "year_to", "limit", "count", "max_downloads", "workers", "rounds", "min_results"):
+        if p.get(k) not in (None, ""):
+            out[k] = p[k]
+    out.update({k: True for k, v in p.items() if v is True and k not in out})
+    return out
+
+
 # ---------------------------------------------------------------- приложение (логика API)
 class WebApp:
     def __init__(self, config_path: str | Path | None = None, cwd: str | Path | None = None):
@@ -477,6 +506,9 @@ class WebApp:
 
     def _sites_registry(self) -> SiteRegistry:
         return SiteRegistry.load(self.cwd / (self.cfg().get("custom_sites") or SITES_DEFAULT))
+
+    def job_running(self) -> bool:
+        return bool(self.jobs.current and self.jobs.current.state == "running")
 
     # --- состояние и конфиг
     def get_state(self) -> dict:
@@ -532,7 +564,7 @@ class WebApp:
         cfg = self.cfg()
         pol = Policy()
         argv, kind, title = build_search_argv(p, cfg, self.known_sources(), pol.forbidden_sources, self.config_path)
-        job = self.jobs.start(kind, [sys.executable, "-m", "litagent", *argv], title)
+        job = self.jobs.start(kind, [sys.executable, "-m", "litagent", *argv], title, web_search_params(p, argv))
         return {"job": job.summary()}
 
     def post_check(self) -> dict:
@@ -551,16 +583,33 @@ class WebApp:
         return {"job": self.jobs.cancel(jid).summary()}
 
     # --- библиотека
-    def get_library(self) -> dict:
+    def get_library(self, sort: str = "year") -> dict:
         root = self.library_root()
         lib = Library(root)
+        if not self.job_running():
+            lib.purge_parts()                              # недокачанные .part не должны висеть в интерфейсе
+            lib.adopt_orphans()                            # PDF на диске без записи в индексе — вернуть в библиотеку
         records = []
         for pk, e in lib.records.items():
             f = e.get("file")
             records.append({**e, "pk": pk, "tags": lib.tags.get(pk, []),
+                            "supp": e.get("supp") or [], "keywords": e.get("keywords") or [],
+                            "has_supp": e.get("has_supp"),
                             "has_file": bool(f and (root / f).is_file())})
-        records.sort(key=lambda r: (-(r.get("year") or 0), (r.get("title") or "").casefold()))
-        return {"root": str(root), "stats": lib.stats(), "records": records, "all_tags": lib.all_tags()}
+        if sort == "cited":
+            records.sort(key=lambda r: (-(r.get("cited_by") if isinstance(r.get("cited_by"), int) else -1),
+                                        -(r.get("year") or 0), (r.get("title") or "").casefold()))
+        elif sort == "old":
+            records.sort(key=lambda r: ((r.get("year") or 0), (r.get("title") or "").casefold()))
+        elif sort == "score":
+            records.sort(key=lambda r: (-(r.get("score") or 0), -(r.get("cited_by") or 0), -(r.get("year") or 0)))
+        elif sort == "title":
+            records.sort(key=lambda r: (r.get("title") or "").casefold())
+        else:
+            records.sort(key=lambda r: (-(r.get("year") or 0), (r.get("title") or "").casefold()))
+        stats = lib.stats()
+        stats["orphans"] = len(lib.orphan_files())         # файлы на диске без записей в индексе
+        return {"root": str(root), "stats": stats, "records": records, "all_tags": lib.all_tags()}
 
     def post_tags(self, data: dict) -> dict:
         pk = data.get("pk")
@@ -575,7 +624,31 @@ class WebApp:
         lib.save()
         return {"pk": pk, "tags": clean, "all_tags": lib.all_tags()}
 
+    def post_tags_auto(self, data: dict) -> dict:
+        """Теги по ключевым словам: одной записи (pk) или всех без тегов (all=true)."""
+        lib = Library(self.library_root())
+        if data.get("all"):
+            touched = 0
+            for pk, e in list(lib.records.items()):
+                if lib.tags.get(pk):
+                    continue
+                lib.auto_tag(Record.from_dict(e), force=bool(data.get("force")))
+                touched += 1
+            lib.save()
+            return {"tagged": touched, "all_tags": lib.all_tags()}
+        pk = data.get("pk")
+        if not isinstance(pk, str):
+            raise ApiError(400, "Ожидается {pk: строка} или {all: true}.")
+        e = lib.records.get(pk)
+        if e is None:
+            raise ApiError(404, f"Нет записи {pk} в библиотеке.")
+        tags = lib.auto_tag(Record.from_dict(e), force=bool(data.get("force")))
+        lib.save()
+        return {"pk": pk, "tags": tags, "all_tags": lib.all_tags()}
+
     def post_library_delete(self, data: dict) -> dict:
+        if self.job_running():
+            raise ApiError(409, "Идёт запуск: удаление статей во время скачивания отключено.")
         keys = data.get("keys")
         if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
             raise ApiError(400, "Ожидается {keys: непустой список идентификаторов записей}.")
@@ -587,10 +660,180 @@ class WebApp:
         target = (root / rel).resolve()
         if not target.is_relative_to(root) or not target.is_file():
             raise ApiError(404, "Файл не найден в библиотеке.")
-        if target.suffix.lower() not in (".pdf", ".xml", ".tgz"):
+        if target.suffix.lower() == ".part":
+            raise ApiError(404, "Это временный недокачанный файл.")
+        is_supp = target.is_relative_to((root / "supp").resolve())
+        if not is_supp and target.suffix.lower() not in (".pdf", ".xml", ".tgz"):
             raise ApiError(403, "Отдаю только PDF/XML из библиотеки.")
-        ctype = "application/pdf" if target.suffix.lower() == ".pdf" else "application/xml"
+        ctype = "application/pdf" if target.suffix.lower() == ".pdf" else \
+                "application/xml" if target.suffix.lower() in (".xml", ".nxml") else \
+                "application/octet-stream"
         return ctype, target.read_bytes(), target.name
+
+    # --- дополнительные материалы
+    def _library_record(self, pk: str):
+        lib = Library(self.library_root())
+        e = lib.records.get(pk)
+        if e is None:
+            raise ApiError(404, f"Нет записи {pk} в библиотеке.")
+        return lib, Record.from_dict(e)
+
+    def post_supp_fetch(self, data: dict) -> dict:
+        """Автоматически докачать доп. материалы статьи (PMC-пакет и Europe PMC)."""
+        pk = data.get("pk")
+        if not isinstance(pk, str):
+            raise ApiError(400, "Ожидается {pk: строка}.")
+        lib, rec = self._library_record(pk)
+        if not rec.file:
+            raise ApiError(409, "У статьи ещё нет скачанного файла — доп. материалы искать негде.")
+        cfg = self.cfg()
+        pol = Policy()
+        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
+                              cache_dir=lib.cache_dir, retries=2,
+                              download_timeout=int(cfg.get("download_timeout", 25)),
+                              download_retries=int(cfg.get("download_retries", 2)))
+        ctx = Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None,
+                  pmc=bool(cfg.get("pubmed_pmc", True)))
+        dl = Downloader(ctx, lib, pol)
+        try:
+            added = dl.fetch_supplements(rec)
+        except Exception as e:  # noqa: BLE001 — сетевая ошибка должна вернуться текстом, а не 500
+            raise ApiError(502, f"{type(e).__name__}: {str(e)[:200]}") from None
+        if added:
+            rec.has_supp = True
+            lib.register(rec)
+            lib.save()
+        return {"pk": pk, "added": added, "has_supp": rec.has_supp, "supp": lib.supp_list(pk)}
+
+    def post_supp_check(self, data: dict) -> dict:
+        """Есть ли у статьи доп. материалы (дешёвый lite-запрос Europe PMC, кэшируется)."""
+        pk = data.get("pk")
+        if not isinstance(pk, str):
+            raise ApiError(400, "Ожидается {pk: строка}.")
+        lib, rec = self._library_record(pk)
+        found = self._supp_downloader(lib).check_supplements(rec)
+        lib.register(rec)
+        lib.save()
+        return {"pk": pk, "has_supp": found}
+
+    def _supp_downloader(self, lib: Library) -> Downloader:
+        cfg = self.cfg()
+        pol = Policy()
+        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
+                              cache_dir=lib.cache_dir, retries=2,
+                              download_timeout=int(cfg.get("download_timeout", 25)),
+                              download_retries=int(cfg.get("download_retries", 2)))
+        return Downloader(Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None,
+                              pmc=bool(cfg.get("pubmed_pmc", True))), lib, pol)
+
+    def post_supp_scan(self, data: dict) -> dict:
+        """Автопроверка «есть ли доп. материалы» у статей, где статус неизвестен (Europe PMC lite, кэш).
+        {limit: N} — сколько записей проверить за вызов."""
+        try:
+            limit = int(data.get("limit") or 30)
+        except (TypeError, ValueError):
+            limit = 30
+        limit = max(1, min(limit, 200))
+        lib = Library(self.library_root())
+        todo = [(pk, e) for pk, e in lib.records.items()
+                if e.get("file") and e.get("has_supp") is None and (e.get("pmcid") or e.get("supp_urls"))]
+        dl = self._supp_downloader(lib)
+        checked, changed = 0, {}
+        for pk, e in todo:
+            if len(changed) >= limit:
+                break
+            try:
+                res = dl.check_supplements(Record.from_dict(e))
+            except Exception:  # noqa: BLE001 — сбой одной проверки не валит весь скан
+                continue
+            checked += 1
+            if res is not None:
+                e["has_supp"] = bool(res)
+                changed[pk] = bool(res)
+        if changed:
+            lib.save()
+        return {"checked": checked, "supp": changed, "more": len(todo) > checked}
+
+    def post_citations(self, data: dict) -> dict:
+        """Подтянуть число цитирований (поле cited_by) записям, у которых оно пустое:
+        пакетный запрос OpenAlex по DOI. Иначе сортировка «по цитированиям» бессмысленна —
+        PubMed-источник цитирований не отдаёт."""
+        try:
+            limit = int(data.get("limit") or 50)
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 500))
+        if self.job_running():
+            return {"updated": 0, "more": True}
+        lib = Library(self.library_root())
+        cfg = self.cfg()
+        todo = [(pk, norm_doi(e.get("doi"))) for pk, e in lib.records.items()
+                if e.get("file") and norm_doi(e.get("doi")) and e.get("cited_by") is None]
+        if not todo:
+            return {"updated": 0, "more": False}
+        ua = f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})"
+        client = PoliteClient(Policy(), ua, cache_dir=None, retries=2)
+        params = {"mailto": cfg.get("email") or ""}
+        key = (cfg.get("keys") or {}).get("openalex") or ""
+        updated = 0
+        for i in range(0, min(len(todo), limit), 25):              # OpenAlex: до 50 DOI в одном фильтре
+            chunk = todo[i:i + 25]
+            p = {**params, "filter": "doi:" + "|".join(d for _, d in chunk),
+                 "per-page": str(len(chunk)), "select": "doi,cited_by_count"}
+            if key:
+                p["api_key"] = key
+            try:
+                r = client.get("https://api.openalex.org/works", p)
+                hits = {norm_doi(w.get("doi")): w.get("cited_by_count") for w in r.json().get("results", [])}
+            except Exception:  # noqa: BLE001 — сеть/формат: останавливаемся, то, что обновили, сохраняем
+                break
+            if r.status != 200:
+                break
+            changed = False
+            for pk, doi in chunk:
+                if doi in hits and hits[doi] is not None:
+                    lib.records[pk]["cited_by"] = int(hits[doi])
+                    updated += 1
+                    changed = True
+            if changed:
+                lib.save()
+        return {"updated": updated, "more": len(todo) > updated and len(todo) > limit}
+
+    def post_supp_url(self, data: dict) -> dict:
+        """Вручную добавить файл доп. материалов по URL."""
+        pk, url = data.get("pk"), (data.get("url") or "").strip()
+        if not isinstance(pk, str) or not url:
+            raise ApiError(400, "Ожидается {pk: строка, url: строка}.")
+        lib, rec = self._library_record(pk)
+        cfg = self.cfg()
+        pol = Policy()
+        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
+                              cache_dir=None, retries=2,
+                              download_timeout=int(cfg.get("download_timeout", 25)),
+                              download_retries=int(cfg.get("download_retries", 2)))
+        ctx = Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None)
+        try:
+            entry = Downloader(ctx, lib, pol).fetch_supp_url(rec, url)
+        except HttpError as e:
+            raise ApiError(502, str(e)[:300]) from None
+        except Blocked as e:
+            raise ApiError(400, str(e)[:300]) from None
+        except Exception as e:  # noqa: BLE001
+            raise ApiError(502, f"{type(e).__name__}: {str(e)[:200]}") from None
+        lib.register(rec)
+        lib.save()
+        return {"pk": pk, "supp": entry, "all": lib.supp_list(pk)}
+
+    def post_supp_delete(self, data: dict) -> dict:
+        pk, rel = data.get("pk"), data.get("file")
+        if not isinstance(pk, str) or not isinstance(rel, str):
+            raise ApiError(400, "Ожидается {pk: строка, file: строка}.")
+        lib = Library(self.library_root())
+        try:
+            res = lib.delete_supp(pk, rel)
+        except KeyError as e:
+            raise ApiError(404, f"Нет записи/файла: {e}") from None
+        return {"pk": pk, "removed": res["removed"], "supp": lib.supp_list(pk)}
 
     # --- запуски
     def get_runs(self) -> dict:
@@ -602,9 +845,10 @@ class WebApp:
                     continue
                 meta = _read_json(p / "run.json") or {}
                 out.append({"id": p.name, "mode": meta.get("mode", "?"), "started": meta.get("started", ""),
+                            "status": meta.get("status", ""),
                             "total_unique": meta.get("total_unique"), "downloads": meta.get("downloads"),
                             "goal": meta.get("goal", ""), "target": meta.get("target"),
-                            "topics": [s.get("label", "") for s in meta.get("specs", [])][:5]})
+                            "topics": meta.get("topics") or [s.get("label", "") for s in meta.get("specs", [])][:5]})
                 if len(out) >= 200:
                     break
         return {"runs": out}
@@ -858,7 +1102,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/config":
                     self._json(200, app.get_config())
                 elif path == "/api/library":
-                    self._json(200, app.get_library())
+                    self._json(200, app.get_library(q.get("sort") or "year"))
                 elif path == "/api/runs":
                     self._json(200, app.get_runs())
                 elif path.startswith("/api/runs/"):
@@ -891,6 +1135,20 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, app.post_tags(data))
                 elif path == "/api/library/delete":
                     self._json(200, app.post_library_delete(data))
+                elif path == "/api/library/supplements/fetch":
+                    self._json(200, app.post_supp_fetch(data))
+                elif path == "/api/library/supplements/check":
+                    self._json(200, app.post_supp_check(data))
+                elif path == "/api/library/supplements/scan":
+                    self._json(200, app.post_supp_scan(data))
+                elif path == "/api/library/supplements/url":
+                    self._json(200, app.post_supp_url(data))
+                elif path == "/api/library/supplements/delete":
+                    self._json(200, app.post_supp_delete(data))
+                elif path == "/api/library/tags/auto":
+                    self._json(200, app.post_tags_auto(data))
+                elif path == "/api/library/citations":
+                    self._json(200, app.post_citations(data))
                 elif path == "/api/runs/delete":
                     self._json(200, app.post_runs_delete(data))
                 elif path == "/api/cache/clear":

@@ -25,6 +25,7 @@ FIELD_LABELS = {
     "venue": "Поле с названием журнала",
     "is_oa": "Поле-признак открытого доступа (true/false)",
     "cited_by": "Поле с числом цитирований",
+    "keywords": "Поле с ключевыми словами (список или строка; для авто-тегов)",
 }
 
 
@@ -226,9 +227,17 @@ def interview(reg: SiteRegistry, existing: Site | None = None, ask=input, say=pr
                                  required=(k == "title"))
         d.fields = {k: v for k, v in d.fields.items() if v}
 
+        # --- дополнительные материалы
+        say("   Доп. материалы (необязательно): если API сообщает о приложениях к статье, агент сможет их скачивать.")
+        d.supp_flag = w.text("15. Поле-признак «есть доп. материалы» (например hasSuppl / isSupplemented)", d.supp_flag)
+        d.supp_path = w.text("16. Поле со ссылками на файлы доп. материалов (список или строка)", d.supp_path)
+        d.supp_url = w.text("17. Шаблон ссылки на пакет ({id} или {doi}), например https://site.org/{id}/supp.zip", d.supp_url)
+        if "{id}" in (d.supp_url or ""):
+            d.id_param = w.text("18. Поле с id для шаблона (например pmcid)", d.id_param)
+
         # --- пометки и режим
-        d.notes = w.text("15. Особенности для нейросети: синтаксис, лимиты, подводные камни (необязательно)", d.notes)
-        d.enabled = w.yesno("16. Использовать сайт автоматически во всех запусках (иначе — только через --sources)?", d.enabled)
+        d.notes = w.text("19. Особенности для нейросети: синтаксис, лимиты, подводные камни (необязательно)", d.notes)
+        d.enabled = w.yesno("20. Использовать сайт автоматически во всех запусках (иначе — только через --sources)?", d.enabled)
 
         errs = d.validate(policy)
         if errs:

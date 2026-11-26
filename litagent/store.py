@@ -7,6 +7,8 @@ import json
 import os
 import re
 import shutil
+import time
+import threading
 from pathlib import Path
 
 from .models import Record, safe_name
@@ -14,6 +16,8 @@ from .models import Record, safe_name
 ARTICLE_EXT = {".pdf", ".xml", ".part"}     # что считается скачанной статьёй при очистке
 # Файл, созданный агентом: Автор_Год_Название_<8 hex>.pdf|xml[.tgz][.part]. В подпапках источников очистка трогает только такие файлы.
 OURS = re.compile(r"_[0-9a-f]{8}\.(?:pdf|xml)(?:\.tgz)?(?:\.part)?$", re.I)
+
+SAVE_LOCK = threading.Lock()                 # индекс один на все Library-экземпляры процесса (CLI-запуск — свой процесс)
 
 
 class Library:
@@ -63,17 +67,46 @@ class Library:
             folder = folder / self.source_dir(rec)
         return folder / f"{base}_{h}{ext}"
 
+    def supp_dir_for(self, file_rel: str) -> Path:
+        """Папка доп. материалов статьи: pdf/<src>/A_b1c2.pdf -> supp/<src>/A_b1c2/."""
+        p = Path(file_rel)
+        parts = list(p.parts)
+        if parts and parts[0] in ("pdf", "xml"):
+            parts[0] = "supp"
+        else:
+            parts = ["supp"] + parts
+        parts[-1] = p.stem
+        return self.root.joinpath(*parts)
+
     def register(self, rec: Record) -> None:
         pk = next((self.aliases[k] for k in rec.keys() if k in self.aliases), None) or rec.primary_key()
         self.records[pk] = rec.to_dict()
         for k in rec.keys():
             self.aliases.setdefault(k, pk)
 
-    def save(self) -> None:
-        tmp = self.index_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"records": self.records, "aliases": self.aliases, "tags": self.tags},
-                                  ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, self.index_path)
+    def save(self, merge: bool = True) -> None:
+        """merge=True: перед записью перечитать файл и слить — индекс пишут параллельно CLI-запуск
+        (свой процесс) и веб-эндпоинты, сохранение только своих словарей стирало чужие записи,
+        и на диске оставались PDF без записей в библиотеке.
+        merge=False (delete/clean/organize): там удаление записей намеренное, воскрешать их с диска нельзя."""
+        with SAVE_LOCK:
+            if merge:
+                disk = {}
+                if self.index_path.exists():
+                    try:
+                        disk = json.loads(self.index_path.read_text(encoding="utf-8"))
+                    except (ValueError, OSError):
+                        disk = {}
+                for pk, e in disk.get("records", {}).items():   # записи, добавленные другой стороной, — база
+                    self.records.setdefault(pk, e)
+                for k, pk in disk.get("aliases", {}).items():
+                    self.aliases.setdefault(k, pk)
+                for pk, ts in disk.get("tags", {}).items():     # теги: не теряем проставленные параллельно
+                    self.tags.setdefault(pk, ts)
+            tmp = self.index_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"records": self.records, "aliases": self.aliases, "tags": self.tags},
+                                      ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, self.index_path)
 
     # ------------------------------------------------------------ теги и удаление записей
     @staticmethod
@@ -90,6 +123,14 @@ class Library:
             raise KeyError(pk)
         self.tags[pk] = self._norm_tags(tags)
         return self.tags[pk]
+
+    def auto_tag(self, rec: Record, force: bool = False) -> list[str]:
+        """Теги по ключевым словам источника (litagent.tags); ручные теги не перетираются без force."""
+        from .tags import suggest_tags
+        pk = next((self.aliases[k] for k in rec.keys() if k in self.aliases), None) or rec.primary_key()
+        if self.tags.get(pk) and not force:
+            return self.tags[pk]
+        return self.set_tags(pk, suggest_tags(rec))
 
     def all_tags(self) -> list[str]:
         return sorted({t for ts in self.tags.values() for t in ts}, key=str.casefold)
@@ -113,13 +154,63 @@ class Library:
                         res["files"] += 1
                     except OSError as ex:
                         res["errors"].append(f"{p.name}: {ex}")
+                sd = self.supp_dir_for(f)
+                if sd.is_dir() and sd.resolve().is_relative_to(self.root.resolve()):
+                    try:
+                        res["bytes"] += self._size([sd])
+                        shutil.rmtree(sd)
+                    except OSError as ex:
+                        res["errors"].append(f"{sd.name}: {ex}")
             del self.records[pk]
             res["deleted"] += 1
         self.aliases = {a: k for a, k in self.aliases.items() if k in self.records}
         self.tags = {k: t for k, t in self.tags.items() if k in self.records}
         self.prune_empty()
-        self.save()
+        self.save(merge=False)          # удалённые записи с диска возвращать нельзя
         return res
+
+    # ------------------------------------------------------------ дополнительные материалы
+    def _supp_files(self) -> list[Path]:
+        d = self.root / "supp"
+        return [p for p in d.rglob("*") if p.is_file() and p.suffix.lower() != ".part"] if d.is_dir() else []
+
+    def supp_list(self, pk: str) -> list[dict]:
+        e = self.records.get(pk)
+        if e is None:
+            raise KeyError(pk)
+        out = []
+        for s in e.get("supp") or []:
+            p = self.root / s.get("file", "")
+            if p.is_file():
+                out.append({**s, "size": p.stat().st_size})
+        return out
+
+    @staticmethod
+    def supp_name(name: str) -> str:
+        """Безопасное имя файла доп. материалов (плоское, без путей; расширение сохраняется)."""
+        n = Path(str(name)).name.replace("\\", "/")
+        n = re.sub(r"[^\w.\- ]+", "_", n).strip("._ ")
+        return n[:120] or "file"
+
+    def delete_supp(self, pk: str, rel_file: str) -> dict:
+        e = self.records.get(pk)
+        if e is None:
+            raise KeyError(pk)
+        before = e.get("supp") or []
+        e["supp"] = [s for s in before if s.get("file") != rel_file]
+        if len(e["supp"]) == len(before):
+            raise KeyError(rel_file)
+        p = (self.root / rel_file).resolve()
+        removed = False
+        if p.is_relative_to(self.root.resolve()) and p.is_file():
+            try:
+                p.unlink()
+                removed = True
+            except OSError:
+                pass
+        self.prune_empty()
+        self.save()
+        return {"removed": removed, "supp": e["supp"]}
 
     # ------------------------------------------------------------ очистка
     def _article_files(self, sub: str) -> list[Path]:
@@ -132,6 +223,62 @@ class Library:
                 out += [p for p in sd.iterdir() if (p.is_file() or p.is_symlink()) and OURS.search(p.name)]
         return out
 
+    def orphan_files(self, fresh: float = 15.0) -> list[Path]:
+        """Файлы статей на диске без записей в индексе (следы потерянной записи). Свежескачанные
+        (mtime < fresh с) не считаем: их регистрация может быть буквально в эту секунду."""
+        known = {(self.root / e["file"]).resolve() for e in self.records.values() if e.get("file")}
+        now = time.time()
+        out = []
+        for sub in ("pdf", "xml"):
+            for p in self._article_files(sub):
+                if p.suffix.lower() == ".part" or p.resolve() in known:
+                    continue
+                try:
+                    if now - p.stat().st_mtime < fresh:
+                        continue
+                except OSError:
+                    continue
+                out.append(p)
+        return out
+
+    def adopt_orphans(self) -> list[str]:
+        """Создаёт записи для файлов, потерянных в индексе (обрыв записи при параллельной работе
+        CLI и веб-эндпоинтов)."""
+        pks = []
+        for p in self.orphan_files():
+            rel = str(p.relative_to(self.root))
+            src = p.parent.name if len(p.relative_to(self.root).parts) > 2 else "unknown"
+            stem = re.sub(r"_[0-9a-f]{8}(\.(pdf|xml))(\.tgz)?$", "", p.name, flags=re.I)
+            title = stem.replace("_", " ").strip() or p.name
+            rec = Record(title=title, sources=[src], file=rel, status="recovered")
+            self.register(rec)
+            pks.append(rec.primary_key())
+        if pks:
+            self.save()
+        return pks
+
+    def _part_files(self) -> list[Path]:
+        """Недокачанные временные файлы (*.part) внутри библиотеки."""
+        out: list[Path] = []
+        for sub in ("pdf", "xml", "supp"):
+            d = self.root / sub
+            if d.is_dir():
+                out += [p for p in d.rglob("*.part") if p.is_file()]
+        return out
+
+    def purge_parts(self) -> dict:
+        """Удаляет оставшиеся .part (обрыв скачивания не должен выглядеть как статья)."""
+        res = {"files": 0, "bytes": 0, "errors": []}
+        for p in self._part_files():
+            try:
+                res["bytes"] += p.stat().st_size
+                p.unlink()
+                res["files"] += 1
+            except OSError as e:
+                res["errors"].append(f"{p.name}: {e}")
+        self.prune_empty()
+        return res
+
     def prune_empty(self) -> None:
         """Убирает пустые папки источников (остаются после неудачных скачиваний)."""
         for sd in self._source_dirs():
@@ -139,6 +286,14 @@ class Library:
                 sd.rmdir()
             except OSError:
                 pass
+        supp = self.root / "supp"
+        if supp.is_dir():
+            for sd in sorted(supp.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                if sd.is_dir() and not sd.is_symlink():
+                    try:
+                        sd.rmdir()
+                    except OSError:
+                        pass
 
     def _source_dirs(self) -> list[Path]:
         return [sd for k in ("pdf", "xml") if (self.root / k).is_dir()
@@ -151,7 +306,7 @@ class Library:
 
     @staticmethod
     def _article_files_in(sd: Path) -> list[Path]:
-        return [p for p in sd.iterdir() if p.is_file() and OURS.search(p.name)]
+        return [p for p in sd.iterdir() if p.is_file() and OURS.search(p.name) and p.suffix.lower() != ".part"]
 
     def _cache_files(self) -> list[Path]:
         return [p for p in self.cache_dir.iterdir() if p.is_file()] if self.cache_dir.is_dir() else []
@@ -185,14 +340,18 @@ class Library:
     def stats(self) -> dict:
         pdf, xml, cache, runs = (self._article_files("pdf"), self._article_files("xml"),
                                  self._cache_files(), self._run_dirs())
+        pdf = [p for p in pdf if p.suffix.lower() != ".part"]      # недокачанные .part статьями не считаются
+        xml = [p for p in xml if p.suffix.lower() != ".part"]
+        supp = self._supp_files()
         return {"pdf": len(pdf), "xml": len(xml), "articles_bytes": self._size(pdf + xml),
+                "supp": len(supp), "supp_bytes": self._size(supp),
                 "cache": len(cache), "cache_bytes": self._size(cache),
                 "runs": len(runs), "runs_bytes": self._size(runs), "indexed": len(self.records)}
 
     def clean(self, runs: bool = False, cache: bool = False, articles: bool = True) -> dict:
-        """articles — удалить скачанные .pdf/.xml (и недокачанные .part) из pdf/ и xml/ (чужие файлы не трогает),
-        runs — отчёты запусков (логи: runs/), cache — HTTP-кэш. Индекс приводится в соответствие с диском."""
-        res = {"pdf": 0, "xml": 0, "runs": 0, "cache": 0, "bytes": 0, "errors": []}
+        """articles — удалить скачанные .pdf/.xml, их доп. материалы (supp/) и недокачанные .part из pdf/ и xml/
+        (чужие файлы не трогает), runs — отчёты запусков (логи: runs/), cache — HTTP-кэш. Индекс приводится в соответствие с диском."""
+        res = {"pdf": 0, "xml": 0, "supp": 0, "parts": 0, "runs": 0, "cache": 0, "bytes": 0, "errors": []}
         victims = [(k, p) for k in ("pdf", "xml") for p in self._article_files(k)] if articles else []
         if cache:
             victims += [("cache", p) for p in self._cache_files()]
@@ -200,10 +359,28 @@ class Library:
             try:
                 size = p.lstat().st_size
                 p.unlink()
-                res[kind] += 1
+                if p.suffix.lower() == ".part":
+                    res["parts"] += 1
+                else:
+                    res[kind] += 1
                 res["bytes"] += size
             except OSError as e:
                 res["errors"].append(f"{p.name}: {e}")
+        if articles:
+            supp_root = self.root / "supp"
+            if supp_root.is_dir():
+                try:
+                    res["bytes"] += self._size([supp_root])
+                    shutil.rmtree(supp_root)
+                    res["supp"] += 1
+                except OSError as e:
+                    res["errors"].append(f"supp: {e}")
+            for e in self.records.values():
+                e.pop("supp", None)
+        pr = self.purge_parts()
+        res["parts"] += pr["files"]
+        res["bytes"] += pr["bytes"]
+        res["errors"] += pr["errors"]
         if runs:
             for d in self._run_dirs():
                 try:
@@ -216,7 +393,7 @@ class Library:
         self.records = {k: e for k, e in self.records.items() if e.get("file") and (self.root / e["file"]).exists()}
         self.aliases = {a: k for a, k in self.aliases.items() if k in self.records}
         self.tags = {k: t for k, t in self.tags.items() if k in self.records}
-        self.save()
+        self.save(merge=False)          # чистка целенаправленно убирает записи
         return res
 
     # ------------------------------------------------------------ разбивка уже скачанного по папкам источников
@@ -244,6 +421,13 @@ class Library:
                     continue
                 os.replace(src, dest)
                 e["file"] = str(dest.relative_to(self.root))
+                old_supp = self.supp_dir_for(f)
+                new_supp = self.supp_dir_for(e["file"])
+                if old_supp.is_dir() and not new_supp.exists():          # доп. материалы переезжают со статьёй
+                    new_supp.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(old_supp, new_supp)
+                    e["supp"] = [{**s, "file": (new_supp / Path(s["file"]).name).relative_to(self.root).as_posix()}
+                                 for s in (e.get("supp") or [])]
                 res["moved"] += 1
             except OSError as ex:
                 res["errors"].append(f"{src.name}: {ex}")

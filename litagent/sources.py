@@ -290,6 +290,9 @@ class EuropePMC(Source):
                 pdfs.append(u.get("url"))
         oa = r.get("isOpenAccess") == "Y"
         pmcid = r.get("pmcid")
+        kws = (r.get("keywordList") or {}).get("keyword", [])
+        mesh = [m.get("descriptorName") for m in (r.get("meshHeadingList") or {}).get("meshHeading", [])
+                if m.get("majorTopic_YN") == "Y"]
         return Record(
             title=(r.get("title") or "").rstrip("."), year=_int(r.get("pubYear")),
             authors=[a.strip() for a in (r.get("authorString") or "").rstrip(".").split(",") if a.strip()],
@@ -297,6 +300,8 @@ class EuropePMC(Source):
             pmcid=pmcid, abstract=strip_tags(r.get("abstractText") or ""),
             venue=((r.get("journalInfo") or {}).get("journal") or {}).get("title", ""),
             cited_by=_int(r.get("citedByCount")), is_oa=oa, pdf_urls=[u for u in pdfs if u],
+            keywords=[str(k) for k in kws if str(k).strip()] + mesh,
+            has_supp=(r.get("hasSuppl") == "Y") if r.get("hasSuppl") else None,
             xml_url=(f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML" if (oa and pmcid) else None),
             url=f"https://europepmc.org/article/{r.get('source')}/{r.get('id')}" if r.get("id") else None)
 
@@ -349,6 +354,7 @@ class Arxiv(Source):
                     authors=[(a.findtext(ATOM + "name") or "").strip() for a in e.findall(ATOM + "author")],
                     year=_year_from_text(e.findtext(ATOM + "published")), arxiv_id=aid,
                     doi=e.findtext(AX + "doi"), is_oa=True, venue="arXiv",
+                    keywords=[(t.get("term") or "").strip() for t in e.findall(ATOM + "category") if t.get("term")],
                     pdf_urls=[f"https://export.arxiv.org/pdf/{aid}"], url=f"https://arxiv.org/abs/{aid}"))
             start += len(entries)
             if total is not None and start >= total:
@@ -415,11 +421,15 @@ class OpenAlex(Source):
         src = ((w.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
         pm = (ids.get("pmid") or "").rstrip("/").split("/")[-1] or None
         pmc = (ids.get("pmcid") or "").rstrip("/").split("/")[-1] or None
+        kws = [t.get("display_name", "") for t in w.get("topics") or [] if t.get("status") != "deprecated"]
+        kws += [k.get("display_name", "") for k in w.get("keywords") or []]
+        kws += [m.get("descriptor_name", "") for m in w.get("mesh") or [] if m.get("is_major")]
         return Record(
             title=w.get("title") or "", year=_int(w.get("publication_year")), doi=w.get("doi"),
             authors=[(a.get("author") or {}).get("display_name", "") for a in w.get("authorships", [])],
             abstract=inv_abstract(w.get("abstract_inverted_index")), venue=src, cited_by=_int(w.get("cited_by_count")),
             is_oa=(w.get("open_access") or {}).get("is_oa"), pdf_urls=pdfs, pmid=pm, pmcid=pmc,
+            keywords=[k for k in kws if k],
             openalex_id=(w.get("id") or "").rsplit("/", 1)[-1] or None, url=w.get("doi") or w.get("id"))
 
 

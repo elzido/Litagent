@@ -24,7 +24,7 @@ from .sources import SOURCE_CLASSES, Ctx, Source, _int, bool_expr, flat_terms, i
 
 DEFAULT_FILE = "custom_sites.json"
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,30}$")
-FIELD_KEYS = ("title", "authors", "year", "doi", "abstract", "pdf_url", "url", "venue", "is_oa", "cited_by")
+FIELD_KEYS = ("title", "authors", "year", "doi", "abstract", "pdf_url", "url", "venue", "is_oa", "cited_by", "keywords")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -148,6 +148,10 @@ class Site:
     results_path: str = ""
     total_path: str = ""
     fields: dict = field(default_factory=dict)
+    supp_flag: str = ""                   # путь в записи к признаку «есть доп. материалы» (hasSuppl / isSupplemented)
+    supp_path: str = ""                   # путь в записи к списку ссылок на доп. материалы (список или строка)
+    supp_url: str = ""                    # шаблон ссылки на пакет доп. материалов: {id} — id_param, {doi} — DOI
+    id_param: str = ""                    # поле записи с идентификатором для шаблона (например pmcid)
     notes: str = ""                       # синтаксис, лимиты, подводные камни — тоже уйдут в промпт LLM
     enabled: bool = True                  # включать ли автоматически во все запуски
     origin: str = ""                      # откуда импортирован (URL/файл), если не добавлен вручную
@@ -403,8 +407,10 @@ class CustomSource(Source):
         return [x for x in items if isinstance(x, dict)]
 
     def record_from(self, item: dict) -> Record | None:
-        f = self.site.fields
+        s = self.site
+        f = s.fields
         g = lambda k: get_path(item, f[k]) if f.get(k) else None      # noqa: E731
+        gp = lambda p: get_path(item, p) if p else None                 # noqa: E731
         title = _to_str(g("title"))
         if not title:
             return None
@@ -417,9 +423,33 @@ class CustomSource(Source):
         oa = _to_bool(g("is_oa")) if f.get("is_oa") else None
         if oa is None and pdfs:
             oa = True
-        return Record(title=title, authors=_str_list(g("authors")), year=_to_year(g("year")), doi=doi,
-                      abstract=abstract, venue=_to_str(g("venue")), cited_by=_int(g("cited_by")),
-                      is_oa=oa, pdf_urls=pdfs, url=url)
+        rec = Record(title=title, authors=_str_list(g("authors")), year=_to_year(g("year")), doi=doi,
+                     abstract=abstract, venue=_to_str(g("venue")), cited_by=_int(g("cited_by")),
+                     is_oa=oa, pdf_urls=pdfs, url=url, keywords=_str_list(g("keywords")))
+        self._supp(item, rec, gp)
+        return rec
+
+    def _supp(self, item: dict, rec: Record, gp) -> None:
+        """Что сайт сообщил о доп. материалах: признак, список ссылок, шаблон пакета."""
+        s = self.site
+        if s.supp_flag:
+            v = _to_bool(gp(s.supp_flag))
+            if v is not None:
+                rec.has_supp = v
+        if s.supp_path:
+            urls = [u for u in _str_list(gp(s.supp_path)) if u.lower().startswith(("http://", "https://"))]
+            rec.supp_urls += [u for u in urls if u not in rec.supp_urls]
+            if urls:
+                rec.has_supp = True
+        tpl = s.supp_url or ""
+        if "{id}" in tpl or "{doi}" in tpl:
+            ident = _to_str(gp(s.id_param)) if s.id_param else ""
+            if ("{id}" in tpl and not ident) or ("{doi}" in tpl and not rec.doi):
+                return
+            link = tpl.replace("{id}", ident).replace("{doi}", rec.doi or "")
+            if link.startswith(("http://", "https://")) and link not in rec.supp_urls:
+                rec.supp_urls.append(link)
+                rec.has_supp = True
 
     def search(self, spec: SearchSpec, limit: int):
         s = self.site
@@ -474,6 +504,8 @@ _FIELD_CANDIDATES = {
     "venue": ["venue", "journal.title", "journal", "container-title", "source"],
     "is_oa": ["is_oa", "isOpenAccess", "open_access.is_oa", "open_access"],
     "cited_by": ["cited_by_count", "citationCount", "citations", "cited_by"],
+    "keywords": ["keywords", "keyword", "keywordList.keyword", "tags", "topics[].display_name",
+                 "mesh[].descriptor_name", "MeshHeading[].descriptorName"],
 }
 _TOTAL_CANDIDATES = ["total", "totalHits", "total_results", "totalResults", "count", "hitCount", "numFound",
                      "meta.count", "meta.total", "hits.total.value", "hits.total"]

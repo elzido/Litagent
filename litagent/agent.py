@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import datetime
+import json
 import threading
 from pathlib import Path
 
@@ -24,12 +25,17 @@ class Agent:
         if keys.get("ncbi"):
             self.policy.intervals["eutils.ncbi.nlm.nih.gov"] = 0.11     # 10 запр./с с ключом
         self.lib = Library(cfg.get("out", "library"), by_source=bool(cfg.get("folders_by_source", True)))
+        self.lib.purge_parts()                          # обрывки .part от прошлых прерванных запусков — не статьи
         ua = f"{cfg.get('tool', 'litagent')}/1.0 (mailto:{cfg.get('email') or 'unknown'})"
         self.client = PoliteClient(self.policy, ua, cache_dir=self.lib.cache_dir,
                                    cache_ttl=int(cfg.get("cache_ttl", 86400)), log=log,
                                    download_timeout=int(cfg.get("download_timeout", 25)),
                                    download_retries=int(cfg.get("download_retries", 2)))
         self.workers = max(1, int(cfg.get("download_workers", 10)))
+        self.auto_tags = bool(cfg.get("auto_tags", False))   # теги по ключевым словам при скачивании
+        self.auto_supp_check = bool(cfg.get("auto_supp_check", True))   # сам определять наличие доп. материалов
+        self.params: dict = {}                               # параметры запуска (в runs/<id>/run.json с самого начала)
+        self.run_started = False                             # begin_run вызван — можно писать промежуточный run.json
         self.ctx = Ctx(self.client, cfg.get("email", ""), keys, cfg.get("tool", "litagent"), log,
                        pmc=bool(cfg.get("pubmed_pmc", True)))
         self.sources = make_sources(self.ctx)
@@ -137,6 +143,7 @@ class Agent:
             entry, kept = res
             self.runlog.append(entry)
             allrecs += kept
+        self.update_run({"queries": self.runlog})    # запросы видны в отчёте даже при немедленном Ctrl+C
         return dedupe(allrecs)
 
     @staticmethod
@@ -145,15 +152,58 @@ class Agent:
                                               -len(r.sources), -(r.cited_by or 0)))
 
     # ------------------------------------------------------------ скачивание
-    def download(self, records: list[Record], max_downloads: int, oa_only: bool = False, pdf_only: bool = False) -> dict:
+    def begin_run(self, mode: str, specs: list[SearchSpec], params: dict) -> Path:
+        """Заводит runs/<id>/run.json СРАЗУ: параметры запуска не должны теряться при Ctrl+C/отмене."""
+        self.params = {**(params or {}), "mode": mode,
+                       "specs": [dataclasses.asdict(s) for s in specs]}
+        d = self.lib.root / "runs" / self.run_id
+        d.mkdir(parents=True, exist_ok=True)
+        self._write_run_meta({"status": "running"})
+        self.run_started = True
+        return d
+
+    def update_run(self, extra: dict) -> None:
+        if getattr(self, "run_started", False):
+            self.params = {**(self.params or {}), **extra}
+            self._write_run_meta({"status": "running"})
+
+    def _write_run_meta(self, extra: dict) -> None:
+        meta = {"run_id": self.run_id, "started": self.started.isoformat(timespec="seconds"),
+                "http": self.client.stats, **(self.params or {}), **extra}
+        p = self.lib.root / "runs" / self.run_id / "run.json"
+        try:
+            p.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def note_progress(self, counts: dict) -> None:
+        """Промежуточный сброс статистики в run.json (вызывается после каждой скачанной записи)."""
+        self.params["downloads"] = dict(counts)
+        self._write_run_meta({"status": "running"})
+
+    def write_partial_report(self, mode: str, specs: list[SearchSpec], records: list[Record]) -> Path:
+        """Отчёт прерванного запуска: параметры, запросы и всё, что уже скачано."""
+        self.lib.purge_parts()
+        self.lib.prune_empty()
+        self.lib.save()
+        self._write_run_meta({"status": "interrupted", "mode": mode, "queries": self.runlog,
+                              "specs": [dataclasses.asdict(s) for s in specs],
+                              "total_unique": len(records or [])})
+        return self.lib.root / "runs" / self.run_id
+
+    def download(self, records: list[Record], max_downloads: int, oa_only: bool = False, pdf_only: bool = False,
+                 supplements: bool = False) -> dict:
         """pdf_only: цель — max_downloads статей с ДЕЙСТВИТЕЛЬНО скачанным PDF. Записи без PDF получают status 'no_pdf'
-        (или 'failed…'), XML не берётся. Сначала проверяются записи, у которых PDF вероятен (ссылка из источника, PMCID, is_oa)."""
-        counts = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0}
+        (или 'failed…'), XML не берётся. Сначала проверяются записи, у которых PDF вероятен (ссылка из источника, PMCID, is_oa).
+        max_downloads <= 0: без потолка — качаем всех кандидатов.
+        supplements: вместе со статьёй доставать доп. материалы (PMC/Europe PMC)."""
+        counts = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0, "supp": 0}
+        unlimited = max_downloads <= 0
         oa_only = oa_only or pdf_only
         if pdf_only:                                      # стабильно: внутри групп порядок по релевантности сохраняется
             likely = lambda r: 0 if (r.pdf_urls or r.pmcid or r.is_oa) else 1          # noqa: E731
             records = sorted(records, key=likely)
-        cap = max_downloads * (10 if pdf_only else 4)     # без PDF отсеивается много — попыток нужно больше
+        cap = len(records) if unlimited else max_downloads * (10 if pdf_only else 4)  # без PDF отсеивается много — попыток нужно больше
         queue = iter(records)
         got = attempts = done_n = 0
         pending: dict = {}
@@ -178,23 +228,42 @@ class Agent:
                 st = f"failed: {type(e).__name__}: {str(e)[:60]}"
             r.status = st
             counts[st if st in counts else "failed"] += 1
+            if self.run_started:
+                self.note_progress(counts)            # отчёт доживёт до Ctrl+C: счётчики на диске после каждой записи
             if st in ("pdf", "xml", "exists"):
                 got += 1
                 self.lib.register(r)
+                if self.auto_tags:
+                    try:
+                        self.lib.auto_tag(r)                     # теги из ключевых слов источника
+                    except Exception:  # noqa: BLE001 — теги не должны ронять скачивание
+                        pass
                 self.lib.save()                       # индекс на диске после каждого успеха: прерывание ничего не теряет
+                counts["supp"] += len(r.supp or [])
             done_n += 1
             self.log(f"  [{done_n}] {st[:60]:<12} {r.short()}")
 
         try:
+            if self.ctx.pmc:                                      # один пакетный oa.fcgi вместо запроса на каждую статью
+                pmcids = [r.pmcid for r in records if r.pmcid]
+                if pmcids:
+                    self.downloader.prefetch_pmc_oa(pmcids)
+                    if self.auto_supp_check:                      # автопроверка наличия доп. материалов (Europe PMC, пакетно)
+                        need = [r.pmcid for r in records if r.pmcid and r.has_supp is None]
+                        if need:
+                            flags = self.downloader.prefetch_supp_flags(need)
+                            for r in records:
+                                if r.pmcid and r.has_supp is None and r.pmcid in flags:
+                                    r.has_supp = flags[r.pmcid]
             with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="dl") as ex:
                 def fill():
                     nonlocal attempts
-                    while len(pending) < self.workers and got + len(pending) < max_downloads and attempts < cap:
+                    while len(pending) < self.workers and attempts < cap and (unlimited or got + len(pending) < max_downloads):
                         r = next_record()
                         if r is None:
                             return
                         attempts += 1
-                        pending[ex.submit(self.downloader.fetch, r, pdf_only)] = r
+                        pending[ex.submit(self.downloader.fetch, r, pdf_only, supplements)] = r
                 fill()
                 while pending:
                     finished, _ = wait(list(pending), return_when=FIRST_COMPLETED)
@@ -209,30 +278,33 @@ class Agent:
         return counts
 
     def download_until(self, records: list[Record], target: int, oa_only: bool = False, pdf_only: bool = True,
-                       more=None, max_rounds: int = 5) -> tuple[dict, list[Record]]:
-        """Качает, пока не наберётся target статей (при pdf_only — именно PDF). Если кандидаты кончились, а цель не достигнута,
-        вызывает more(round) -> list[Record] | None: следующую, более глубокую выдачу (новые записи фильтруются от уже проверенных).
-        Останавливается, когда цель достигнута, more вернул пусто/None или исчерпаны max_rounds дополнительных раундов.
+                       more=None, max_rounds: int = 5, supplements: bool = False) -> tuple[dict, list[Record]]:
+        """Качает, пока не наберётся target статей (при pdf_only — именно PDF). target <= 0 — без цели: качаем всех кандидатов.
+        Если кандидаты кончились, а цель не достигнута, вызывает more(round) -> list[Record] | None: следующую, более глубокую выдачу
+        (новые записи фильтруются от уже проверенных). Останавливается, когда цель достигнута, more вернул пусто/None
+        или исчерпаны max_rounds дополнительных раундов.
         Возвращает (суммарные счётчики, все предложенные записи: проверенные и нет)."""
-        total = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0}
+        total = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0, "supp": 0}
         offered = list(records)
         seen = {k for r in offered for k in r.keys()}
         batch, rnd = list(records), 0
+        unlimited = target <= 0
         while True:
             have = total["pdf"] + total["exists"] + (0 if pdf_only else total["xml"])
-            if have >= target:
+            if not unlimited and have >= target:
                 break
             if batch:
-                c = self.download(batch, target - have, oa_only, pdf_only)
+                c = self.download(batch, 0 if unlimited else target - have, oa_only, pdf_only, supplements)
                 for k, v in c.items():
                     total[k] += v
                 have = total["pdf"] + total["exists"] + (0 if pdf_only else total["xml"])
-                if have >= target:
+                if not unlimited and have >= target:
                     break
             if more is None or rnd >= max_rounds:
                 break
             rnd += 1
-            self.log(f"\nНабрано {have} из {target}: углубляю поиск (доп. раунд {rnd} из {max_rounds})…")
+            self.log(("\nКачаю без потолка: углубляю поиск" if unlimited else f"\nНабрано {have} из {target}: углубляю поиск")
+                     + f" (доп. раунд {rnd} из {max_rounds})…")
             fresh = more(rnd) or []
             batch = []
             for r in fresh:
@@ -250,9 +322,11 @@ class Agent:
 
     # ------------------------------------------------------------ итог
     def finish(self, mode: str, specs: list[SearchSpec], records: list[Record], extra: dict | None = None) -> Path:
+        self.lib.purge_parts()                          # временные .part не должны оставаться после запуска
         self.lib.prune_empty()
         self.lib.save()
-        meta = {"run_id": self.run_id, "mode": mode, "started": self.started.isoformat(timespec="seconds"),
-                "queries": self.runlog, "specs": [dataclasses.asdict(s) for s in specs],
-                "http": self.client.stats, "total_unique": len(records), **(extra or {})}
+        meta = {"run_id": self.run_id, "started": self.started.isoformat(timespec="seconds"),
+                "http": self.client.stats, **(self.params or {}), "status": "done",
+                "mode": mode, "queries": self.runlog, "specs": [dataclasses.asdict(s) for s in specs],
+                "total_unique": len(records), **(extra or {})}
         return self.lib.write_run(self.run_id, meta, records)
