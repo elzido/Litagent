@@ -172,7 +172,7 @@ tbody tr:hover{background:rgba(226,176,74,.035)}
 tbody tr:last-child td{border-bottom:none}
 .rt{font-weight:600;line-height:1.4}
 .ra{color:var(--muted);font-size:12px;margin-top:2px}
-.src-tag{display:inline-block;font-size:11px;background:var(--bg3);border-radius:6px;padding:1px 7px;margin:1px 2px 1px 0;color:var(--muted)}
+.src-tag{display:inline-block;font-size:11.5px;font-weight:700;background:var(--bg3);border-radius:7px;padding:2px 9px;margin:1px 2px 1px 0;color:var(--muted);white-space:nowrap}
 .st{font-size:11.5px;font-weight:700;border-radius:7px;padding:2px 9px;white-space:nowrap}
 .st.ok{background:var(--ok-bg);color:var(--ok)}
 .st.info{background:var(--info-bg);color:var(--info)}
@@ -181,7 +181,7 @@ tbody tr:last-child td{border-bottom:none}
 .st.mute{background:var(--bg3);color:var(--dim)}
 .num{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* ---------- карточки ---------- */
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr));gap:14px;align-items:start}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr));gap:14px;align-items:start;grid-auto-flow:row dense}
 .card{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;
   transition:border-color .18s var(--ease),transform .18s var(--ease),box-shadow .18s var(--ease)}
 .card:hover{border-color:var(--line2);transform:translateY(-2px);box-shadow:0 6px 22px rgba(0,0,0,.25)}
@@ -257,6 +257,10 @@ details.adv summary:hover{color:var(--text)}
 .tag-input{width:110px;padding:2px 9px;font-size:11.5px;border-radius:999px;background:var(--bg0);
   border:1px solid rgba(127,212,193,.55);color:var(--text)}
 .tag-input:focus{outline:none;box-shadow:0 0 0 3px rgba(127,212,193,.12)}
+.tagchip.sel{border-color:rgba(127,212,193,.65);box-shadow:0 0 10px rgba(127,212,193,.15)}
+.tag-toggle{background:none;border:none;color:var(--dim);cursor:pointer;font-size:11.5px;padding:2px 8px;
+  border-radius:999px;border:1px dashed var(--line2);transition:all .15s var(--ease);white-space:nowrap}
+.tag-toggle:hover{color:var(--teal);border-color:rgba(127,212,193,.5)}
 .lib-check{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin-top:2px;flex:none;cursor:pointer;
   background:var(--bg0);border:2px solid var(--line2);border-radius:6px;position:relative;
   transition:background .18s var(--ease),border-color .18s var(--ease),box-shadow .18s var(--ease),transform .18s var(--ease)}
@@ -793,7 +797,7 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let S=null, CFG=null, curJob=null, jobSince=0, jobTimer=null, jobStart=null;
-let libData=null, libShown=60, libSel=new Set(), libTagSel=new Set(), tagInputPk=null, libOpen=new Set();
+let libData=null, libShown=60, libSel=new Set(), libTagSel=new Set(), tagInputPk=null, libOpen=new Set(), libTagsOpen=false, tagOpen=new Set();
 
 async function api(path,opts={}){
   const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
@@ -1063,7 +1067,13 @@ function renderTagFilter(){
   libData.records.forEach(r=>(r.tags||[]).forEach(t=>counts[t]=(counts[t]||0)+1));
   const c=$("#lib-tags");
   c.style.display=tags.length?"":"none";
-  c.innerHTML=tags.map(t=>`<button type="button" class="tchip${libTagSel.has(t)?" on":""}" data-libtag="${esc(t)}">${esc(t)}<span class="cnt">${counts[t]||0}</span></button>`).join("");
+  const sorted=[...tags].sort((a,b)=>(counts[b]||0)-(counts[a]||0)||a.localeCompare(b,"ru"));
+  const top=sorted.slice(0,9);
+  const vis=libTagsOpen?sorted:[...top,...[...libTagSel].filter(t=>!top.includes(t))];
+  const chip=t=>`<button type="button" class="tchip${libTagSel.has(t)?" on":""}" data-libtag="${esc(t)}">${esc(t)}<span class="cnt">${counts[t]||0}</span></button>`;
+  let h=vis.map(chip).join("");
+  if(sorted.length>top.length)h+=`<button type="button" class="tag-add-btn" data-tagmore>${libTagsOpen?"▲ свернуть":`▼ ещё ${sorted.length-vis.length}`}</button>`;
+  c.innerHTML=h;
 }
 function libFiltered(){
   const q=$("#lib-q").value.trim().toLowerCase();
@@ -1107,11 +1117,21 @@ function renderLibrary(){
     const canFold=(r.has_file&&(nSupp||known||unknown))||r.abstract;
     const more=canFold||open?
       `<button type="button" class="expand" data-expand data-pk="${esc(r.pk)}" aria-expanded="${open?"true":"false"}">${open?"▲ свернуть":`▼ ${nSupp||known?`доп. материалы${nSupp?` (${nSupp})`:""}`:"подробнее"}`}</button>`:"";
-    const tags=(r.tags||[]).map(t=>`<span class="tagchip">${esc(t)}<button type="button" data-tag-remove data-pk="${esc(r.pk)}" data-tag="${esc(t)}" title="убрать тег">×</button></span>`).join("");
+    const rTags=r.tags||[];
+    const selTags=rTags.filter(t=>libTagSel.has(t));
+    const chip=(t,rem)=>`<span class="tagchip${libTagSel.has(t)?" sel":""}">${esc(t)}${rem?`<button type="button" data-tag-remove data-pk="${esc(r.pk)}" data-tag="${esc(t)}" title="убрать тег">×</button>`:""}</span>`;
     const tagAdd=tagInputPk===r.pk
       ?`<input class="tag-input" data-pk="${esc(r.pk)}" placeholder="тег…" maxlength="80">`
       :`<button type="button" class="tag-add-btn" data-tag-add data-pk="${esc(r.pk)}">+ тег</button>`;
     const autoTag=`<button type="button" class="tag-add-btn" data-tag-auto data-pk="${esc(r.pk)}" title="Проставить теги по ключевым словам статьи">⚙ авто</button>`;
+    let tagrow;
+    if(tagOpen.has(r.pk)||tagInputPk===r.pk){
+      tagrow=`<div class="tagrow">${rTags.map(t=>chip(t,true)).join("")}${autoTag}${tagAdd}`+
+             `${rTags.length?`<button type="button" class="tag-toggle" data-tag-toggle data-pk="${esc(r.pk)}">▲ свернуть</button>`:""}</div>`;
+    }else{
+      tagrow=(selTags.length||rTags.length)?`<div class="tagrow">${selTags.map(t=>chip(t,false)).join("")}`+
+             `${rTags.length?`<button type="button" class="tag-toggle" data-tag-toggle data-pk="${esc(r.pk)}" title="Показать все теги статьи">🏷 ${rTags.length}</button>`:""}</div>`:"";
+    }
     const supps=(r.supp||[]).map(s=>
       `<div class="supp-item"><span class="sn" title="${esc(s.name)}">${esc(s.name)}</span>
         <span class="sz">${mb(s.size||0)}</span>
@@ -1136,7 +1156,7 @@ function renderLibrary(){
         <button type="button" class="del-article" data-del-article data-pk="${esc(r.pk)}" title="удалить статью">${TRASH_SVG}</button>
       </div>
       <div class="metarow">${srcs}${badge}${r.is_oa?' <span class="st ok">OA</span>':""}${r.cited_by!=null?` <span class="st mute" title="Цитирования">⮕ ${esc(r.cited_by)}</span>`:""}${r.score!=null&&r.score!==""?` <span class="st info">оценка ${esc(Number(r.score).toFixed(0))}</span>`:""}${more}</div>
-      <div class="tagrow">${tags}${autoTag}${tagAdd}</div>
+      ${tagrow}
       <div class="actions">${r.has_file&&r.file?`<a class="btn small primary" href="${fileHref(r.file)}" target="_blank" rel="noopener">${r.file.endsWith(".xml")?"XML":"PDF"}</a>`:'<span class="st mute">файл не скачан</span>'}
       ${links.join(" ")}</div>
       <div class="fold${open?"":" collapsed"}">
@@ -1187,6 +1207,8 @@ $("#lib-supp").addEventListener("change",()=>{libShown=60;renderLibrary();});
 $("#lib-sort").addEventListener("change",()=>{libShown=60;renderLibrary();loadLibrary().catch(()=>{});});
 $("#lib-more").onclick=()=>{libShown+=60;renderLibrary();};
 $("#lib-tags").addEventListener("click",e=>{
+  const m=e.target.closest("[data-tagmore]");
+  if(m){libTagsOpen=!libTagsOpen;renderTagFilter();return;}
   const b=e.target.closest("[data-libtag]");if(!b)return;
   const t=b.dataset.libtag;
   libTagSel.has(t)?libTagSel.delete(t):libTagSel.add(t);
@@ -1203,6 +1225,8 @@ $("#lib-list").addEventListener("click",async e=>{
   if(rm){const r=libData.records.find(x=>x.pk===rm.dataset.pk);if(r)saveTags(r.pk,(r.tags||[]).filter(t=>t!==rm.dataset.tag));return;}
   const add=e.target.closest("[data-tag-add]");
   if(add){tagInputPk=add.dataset.pk;renderLibrary();const inp=$("#lib-list .tag-input");if(inp)inp.focus();return;}
+  const tt=e.target.closest("[data-tag-toggle]");
+  if(tt){const pk=tt.dataset.pk;tagOpen.has(pk)?tagOpen.delete(pk):tagOpen.add(pk);renderLibrary();return;}
   const ex=e.target.closest("[data-expand]");
   if(ex){const pk=ex.dataset.pk;libOpen.has(pk)?libOpen.delete(pk):libOpen.add(pk);renderLibrary();return;}
   const at=e.target.closest("[data-tag-auto]");
