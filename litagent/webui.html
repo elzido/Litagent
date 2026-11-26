@@ -1020,7 +1020,8 @@ function resultsTable(rows){
 
 /* ---------- библиотека ---------- */
 async function loadLibrary(){
-  libData=await api("/api/library");libShown=60;
+  const sort=$("#lib-sort")?$("#lib-sort").value:"year";
+  libData=await api("/api/library?sort="+encodeURIComponent(sort));libShown=60;
   $("#lib-root").textContent=libData.root;
   const st=libData.stats;
   $("#lib-stats").innerHTML=
@@ -1028,7 +1029,8 @@ async function loadLibrary(){
      <div class="stat"><b>${mb(st.articles_bytes)}</b>статьи</div>
      ${st.supp?`<div class="stat"><b>${st.supp}</b>доп. файлов (${mb(st.supp_bytes)})</div>`:""}
      <div class="stat"><b>${st.indexed}</b>в индексе</div>
-     <div class="stat"><b>${st.runs}</b>запусков</div><div class="stat"><b>${mb(st.cache_bytes)}</b>HTTP-кэш</div>`;
+     <div class="stat"><b>${st.runs}</b>запусков</div><div class="stat"><b>${mb(st.cache_bytes)}</b>HTTP-кэш</div>`+
+     (st.orphans?`<div class="stat" title="Файлы на диске без записей в индексе — библиотек вернёт их при следующем обновлении (или кнопкой ниже)" style="border-color:rgba(224,133,133,.5)"><b>${st.orphans}</b>без индекса</div>`:"");
   const srcs=[...new Set(libData.records.flatMap(r=>r.sources||[]))].sort();
   const sel=$("#lib-source"),cur=sel.value;
   sel.innerHTML='<option value="">все источники</option>'+srcs.map(s=>`<option>${esc(s)}</option>`).join("");
@@ -1182,7 +1184,7 @@ $("#lib-autotags").onclick=async()=>{
 $("#lib-q").addEventListener("input",()=>{libShown=60;renderLibrary();});
 $("#lib-source").addEventListener("change",()=>{libShown=60;renderLibrary();});
 $("#lib-supp").addEventListener("change",()=>{libShown=60;renderLibrary();});
-$("#lib-sort").addEventListener("change",()=>{libShown=60;renderLibrary();});
+$("#lib-sort").addEventListener("change",()=>{libShown=60;renderLibrary();loadLibrary().catch(()=>{});});
 $("#lib-more").onclick=()=>{libShown+=60;renderLibrary();};
 $("#lib-tags").addEventListener("click",e=>{
   const b=e.target.closest("[data-libtag]");if(!b)return;

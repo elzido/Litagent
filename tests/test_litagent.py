@@ -676,6 +676,66 @@ class TestCli2(CustomBase):
         self.assertGreaterEqual(txt.count("[mysite]"), 2)          # и без --sources сайт подключён сам
 
 
+class TestIndexRaceAndOrphans(unittest.TestCase):
+    """Индекс пишут параллельно CLI и веб: сохранение не должно затирать чужие записи,
+    а файлы без записей — становиться «невидимыми» PDF."""
+
+    def test_save_merges_records_added_by_another_process(self):
+        from litagent.store import Library
+        with tempfile.TemporaryDirectory() as d:
+            lib_a = Library(Path(d, "lib"))          # «CLI»: скачал и зарегистрировал
+            lib_a.register(Record(title="Paper A one two three four", doi="10.1/a", file="pdf/a_1a2b3c4d.pdf"))
+            lib_a.save()
+            lib_b = Library(Path(d, "lib"))          # «веб»: загрузил индекс ДО появления записи A
+            lib_b.register(Record(title="Paper B one two three four", doi="10.1/b", file="pdf/b_1a2b3c4e.pdf"))
+            lib_b.save()                             # без merge стёр бы запись A
+            disk = json.loads((Path(d, "lib") / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted(disk["records"]), ["doi:10.1/a", "doi:10.1/b"])
+
+    def test_delete_survives_merge(self):
+        from litagent.store import Library
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            lib = Library(root)
+            (root / "pdf").mkdir(parents=True, exist_ok=True)
+            for doi in ("a", "b"):
+                (root / "pdf" / f"x_{doi}.pdf").write_bytes(b"%PDF" + b"1" * 2000)
+                lib.register(Record(title=f"Paper {doi} with long enough title", doi=f"10.1/{doi}", file=f"pdf/x_{doi}.pdf"))
+            lib.save()
+            other = Library(root)
+            other.delete(["doi:10.1/a"])                 # save(merge=False): удалённое не воскресает из того же файла
+            disk = json.loads((root / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(list(disk["records"]), ["doi:10.1/b"])
+
+    def test_orphans_detected_and_adopted(self):
+        from litagent.store import Library
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            lib = Library(root)
+            (root / "pdf" / "openalex").mkdir(parents=True)
+            lost = root / "pdf" / "openalex" / "Smith_2020_Lost_paper_1a2b3c4d.pdf"
+            lost.write_bytes(b"%PDF" + b"1" * 2000)
+            fresh = time.time() - 120                # «потерян» больше 15 с назад
+            os.utime(lost, (fresh, fresh))
+            self.assertEqual([p.name for p in lib.orphan_files()], ["Smith_2020_Lost_paper_1a2b3c4d.pdf"])
+            pks = lib.adopt_orphans()
+            self.assertEqual(len(pks), 1)
+            e = lib.records[pks[0]]
+            self.assertEqual(e["file"], "pdf/openalex/Smith_2020_Lost_paper_1a2b3c4d.pdf")
+            self.assertEqual(e["sources"], ["openalex"])
+            self.assertEqual(lib.orphan_files(), [])
+            self.assertTrue((root / "index.json").exists())
+
+    def test_recent_download_not_claimed_as_orphan(self):
+        from litagent.store import Library
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            lib = Library(root)
+            (root / "pdf" / "arxiv").mkdir(parents=True)
+            (root / "pdf" / "arxiv" / "X_2020_Fresh_1a2b3c4f.pdf").write_bytes(b"%PDF" + b"1" * 2000)
+            self.assertEqual(lib.orphan_files(), [])  # только что скачан — CLI успеет зарегистрировать
+
+
 class TestClean(unittest.TestCase):
     def fill(self, root: Path):
         from litagent.store import Library

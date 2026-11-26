@@ -7,6 +7,8 @@ import json
 import os
 import re
 import shutil
+import time
+import threading
 from pathlib import Path
 
 from .models import Record, safe_name
@@ -14,6 +16,8 @@ from .models import Record, safe_name
 ARTICLE_EXT = {".pdf", ".xml", ".part"}     # что считается скачанной статьёй при очистке
 # Файл, созданный агентом: Автор_Год_Название_<8 hex>.pdf|xml[.tgz][.part]. В подпапках источников очистка трогает только такие файлы.
 OURS = re.compile(r"_[0-9a-f]{8}\.(?:pdf|xml)(?:\.tgz)?(?:\.part)?$", re.I)
+
+SAVE_LOCK = threading.Lock()                 # индекс один на все Library-экземпляры процесса (CLI-запуск — свой процесс)
 
 
 class Library:
@@ -80,11 +84,29 @@ class Library:
         for k in rec.keys():
             self.aliases.setdefault(k, pk)
 
-    def save(self) -> None:
-        tmp = self.index_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"records": self.records, "aliases": self.aliases, "tags": self.tags},
-                                  ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, self.index_path)
+    def save(self, merge: bool = True) -> None:
+        """merge=True: перед записью перечитать файл и слить — индекс пишут параллельно CLI-запуск
+        (свой процесс) и веб-эндпоинты, сохранение только своих словарей стирало чужие записи,
+        и на диске оставались PDF без записей в библиотеке.
+        merge=False (delete/clean/organize): там удаление записей намеренное, воскрешать их с диска нельзя."""
+        with SAVE_LOCK:
+            if merge:
+                disk = {}
+                if self.index_path.exists():
+                    try:
+                        disk = json.loads(self.index_path.read_text(encoding="utf-8"))
+                    except (ValueError, OSError):
+                        disk = {}
+                for pk, e in disk.get("records", {}).items():   # записи, добавленные другой стороной, — база
+                    self.records.setdefault(pk, e)
+                for k, pk in disk.get("aliases", {}).items():
+                    self.aliases.setdefault(k, pk)
+                for pk, ts in disk.get("tags", {}).items():     # теги: не теряем проставленные параллельно
+                    self.tags.setdefault(pk, ts)
+            tmp = self.index_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"records": self.records, "aliases": self.aliases, "tags": self.tags},
+                                      ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, self.index_path)
 
     # ------------------------------------------------------------ теги и удаление записей
     @staticmethod
@@ -144,7 +166,7 @@ class Library:
         self.aliases = {a: k for a, k in self.aliases.items() if k in self.records}
         self.tags = {k: t for k, t in self.tags.items() if k in self.records}
         self.prune_empty()
-        self.save()
+        self.save(merge=False)          # удалённые записи с диска возвращать нельзя
         return res
 
     # ------------------------------------------------------------ дополнительные материалы
@@ -200,6 +222,40 @@ class Library:
             if sd.is_dir() and not sd.is_symlink():
                 out += [p for p in sd.iterdir() if (p.is_file() or p.is_symlink()) and OURS.search(p.name)]
         return out
+
+    def orphan_files(self, fresh: float = 15.0) -> list[Path]:
+        """Файлы статей на диске без записей в индексе (следы потерянной записи). Свежескачанные
+        (mtime < fresh с) не считаем: их регистрация может быть буквально в эту секунду."""
+        known = {(self.root / e["file"]).resolve() for e in self.records.values() if e.get("file")}
+        now = time.time()
+        out = []
+        for sub in ("pdf", "xml"):
+            for p in self._article_files(sub):
+                if p.suffix.lower() == ".part" or p.resolve() in known:
+                    continue
+                try:
+                    if now - p.stat().st_mtime < fresh:
+                        continue
+                except OSError:
+                    continue
+                out.append(p)
+        return out
+
+    def adopt_orphans(self) -> list[str]:
+        """Создаёт записи для файлов, потерянных в индексе (обрыв записи при параллельной работе
+        CLI и веб-эндпоинтов)."""
+        pks = []
+        for p in self.orphan_files():
+            rel = str(p.relative_to(self.root))
+            src = p.parent.name if len(p.relative_to(self.root).parts) > 2 else "unknown"
+            stem = re.sub(r"_[0-9a-f]{8}(\.(pdf|xml))(\.tgz)?$", "", p.name, flags=re.I)
+            title = stem.replace("_", " ").strip() or p.name
+            rec = Record(title=title, sources=[src], file=rel, status="recovered")
+            self.register(rec)
+            pks.append(rec.primary_key())
+        if pks:
+            self.save()
+        return pks
 
     def _part_files(self) -> list[Path]:
         """Недокачанные временные файлы (*.part) внутри библиотеки."""
@@ -337,7 +393,7 @@ class Library:
         self.records = {k: e for k, e in self.records.items() if e.get("file") and (self.root / e["file"]).exists()}
         self.aliases = {a: k for a, k in self.aliases.items() if k in self.records}
         self.tags = {k: t for k, t in self.tags.items() if k in self.records}
-        self.save()
+        self.save(merge=False)          # чистка целенаправленно убирает записи
         return res
 
     # ------------------------------------------------------------ разбивка уже скачанного по папкам источников

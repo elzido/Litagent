@@ -488,6 +488,9 @@ class WebApp:
     def _sites_registry(self) -> SiteRegistry:
         return SiteRegistry.load(self.cwd / (self.cfg().get("custom_sites") or SITES_DEFAULT))
 
+    def job_running(self) -> bool:
+        return bool(self.jobs.current and self.jobs.current.state == "running")
+
     # --- состояние и конфиг
     def get_state(self) -> dict:
         cfg = self.cfg()
@@ -561,11 +564,12 @@ class WebApp:
         return {"job": self.jobs.cancel(jid).summary()}
 
     # --- библиотека
-    def get_library(self) -> dict:
+    def get_library(self, sort: str = "year") -> dict:
         root = self.library_root()
         lib = Library(root)
-        if not (self.jobs.current and self.jobs.current.state == "running"):
+        if not self.job_running():
             lib.purge_parts()                              # недокачанные .part не должны висеть в интерфейсе
+            lib.adopt_orphans()                            # PDF на диске без записи в индексе — вернуть в библиотеку
         records = []
         for pk, e in lib.records.items():
             f = e.get("file")
@@ -573,8 +577,18 @@ class WebApp:
                             "supp": e.get("supp") or [], "keywords": e.get("keywords") or [],
                             "has_supp": e.get("has_supp"),
                             "has_file": bool(f and (root / f).is_file())})
-        records.sort(key=lambda r: (-(r.get("year") or 0), (r.get("title") or "").casefold()))
-        return {"root": str(root), "stats": lib.stats(), "records": records, "all_tags": lib.all_tags()}
+        if sort == "cited":
+            records.sort(key=lambda r: (-(r.get("cited_by") if isinstance(r.get("cited_by"), int) else -1),
+                                        -(r.get("year") or 0), (r.get("title") or "").casefold()))
+        elif sort == "score":
+            records.sort(key=lambda r: (-(r.get("score") or 0), -(r.get("cited_by") or 0), -(r.get("year") or 0)))
+        elif sort == "title":
+            records.sort(key=lambda r: (r.get("title") or "").casefold())
+        else:
+            records.sort(key=lambda r: (-(r.get("year") or 0), (r.get("title") or "").casefold()))
+        stats = lib.stats()
+        stats["orphans"] = len(lib.orphan_files())         # файлы на диске без записей в индексе
+        return {"root": str(root), "stats": stats, "records": records, "all_tags": lib.all_tags()}
 
     def post_tags(self, data: dict) -> dict:
         pk = data.get("pk")
@@ -591,6 +605,8 @@ class WebApp:
 
     def post_tags_auto(self, data: dict) -> dict:
         """Теги по ключевым словам: одной записи (pk) или всех без тегов (all=true)."""
+        if self.job_running():
+            raise ApiError(409, "Идёт запуск — теги проставлю по его окончании.")
         lib = Library(self.library_root())
         if data.get("all"):
             touched = 0
@@ -612,6 +628,8 @@ class WebApp:
         return {"pk": pk, "tags": tags, "all_tags": lib.all_tags()}
 
     def post_library_delete(self, data: dict) -> dict:
+        if self.job_running():
+            raise ApiError(409, "Идёт запуск: удаление статей во время скачивания отключено.")
         keys = data.get("keys")
         if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
             raise ApiError(400, "Ожидается {keys: непустой список идентификаторов записей}.")
@@ -643,6 +661,8 @@ class WebApp:
 
     def post_supp_fetch(self, data: dict) -> dict:
         """Автоматически докачать доп. материалы статьи (PMC-пакет и Europe PMC)."""
+        if self.job_running():
+            raise ApiError(409, "Дождитесь окончания запуска — он сейчас скачивает статьи.")
         pk = data.get("pk")
         if not isinstance(pk, str):
             raise ApiError(400, "Ожидается {pk: строка}.")
@@ -670,6 +690,8 @@ class WebApp:
 
     def post_supp_check(self, data: dict) -> dict:
         """Есть ли у статьи доп. материалы (дешёвый lite-запрос Europe PMC, кэшируется)."""
+        if self.job_running():
+            raise ApiError(409, "Идёт запуск — проверка займётся по его окончании.")
         pk = data.get("pk")
         if not isinstance(pk, str):
             raise ApiError(400, "Ожидается {pk: строка}.")
@@ -697,6 +719,8 @@ class WebApp:
         except (TypeError, ValueError):
             limit = 30
         limit = max(1, min(limit, 200))
+        if self.job_running():
+            return {"checked": 0, "supp": {}, "more": True}   # во время запуска не трогаем общий index.json
         lib = Library(self.library_root())
         todo = [(pk, e) for pk, e in lib.records.items()
                 if e.get("file") and e.get("has_supp") is None and (e.get("pmcid") or e.get("supp_urls"))]
@@ -719,6 +743,8 @@ class WebApp:
 
     def post_supp_url(self, data: dict) -> dict:
         """Вручную добавить файл доп. материалов по URL."""
+        if self.job_running():
+            raise ApiError(409, "Дождитесь окончания запуска.")
         pk, url = data.get("pk"), (data.get("url") or "").strip()
         if not isinstance(pk, str) or not url:
             raise ApiError(400, "Ожидается {pk: строка, url: строка}.")
@@ -1019,7 +1045,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/config":
                     self._json(200, app.get_config())
                 elif path == "/api/library":
-                    self._json(200, app.get_library())
+                    self._json(200, app.get_library(q.get("sort") or "year"))
                 elif path == "/api/runs":
                     self._json(200, app.get_runs())
                 elif path.startswith("/api/runs/"):

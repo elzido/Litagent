@@ -540,6 +540,16 @@ class TestSupplementsApi(Tmp):
 
 
 class TestTagsApi(Tmp):
+    def test_library_server_sort(self):
+        lib = self.cwd / "library"
+        lib.mkdir(parents=True)
+        recs = {f"doi:10.1/{i}": {"title": f"T{i}", "doi": f"10.1/{i}", "year": y, "cited_by": c, "sources": []}
+                for i, (y, c) in enumerate([(2001, 5), (2020, None), (2010, 100)])}
+        (lib / "index.json").write_text(json.dumps({"records": recs, "aliases": {}}), encoding="utf-8")
+        self.assertEqual([r["title"] for r in self.app.get_library("year")["records"]], ["T1", "T2", "T0"])
+        self.assertEqual([r["title"] for r in self.app.get_library("cited")["records"]], ["T2", "T0", "T1"])
+        self.assertEqual([r["title"] for r in self.app.get_library("title")["records"]], ["T0", "T1", "T2"])
+
     def test_tags_auto_single_and_all(self):
         self.write_index()                                        # запись "CRISPR therapy" без тегов
         r = self.app.post_tags_auto({"pk": "doi:10.1/x"})
