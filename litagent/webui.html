@@ -1099,7 +1099,10 @@ function renderLibrary(){
         ${nSupp||known?`<div class="supp-tools">
           <input type="text" class="supp-url" data-supp-url-input data-pk="${esc(r.pk)}" placeholder="…или URL файла вручную">
           <button type="button" class="btn small ghost" data-supp-add data-pk="${esc(r.pk)}" title="Скачать файл доп. материалов по указанному URL">+ URL</button>
-        </div>`:""}</div>`:"";
+        </div>`:`<div class="supp-tools">
+          <input type="text" class="supp-url" data-supp-url-input data-pk="${esc(r.pk)}" placeholder="URL файла доп. материалов (вручную)">
+          <button type="button" class="btn small ghost" data-supp-add data-pk="${esc(r.pk)}" title="Скачать файл доп. материалов по указанному URL">+ URL</button>
+        </div>`}</div>`:"";
     return `<div class="card${sel?" selected":""}${open?" open":""}" data-card="${esc(r.pk)}">
       <div style="display:flex;gap:10px;align-items:flex-start">
         <input type="checkbox" class="lib-check" data-pk="${esc(r.pk)}" ${sel?"checked":""} title="выбрать для удаления">
