@@ -55,12 +55,12 @@ nav button.active{background:var(--accent-soft);border-color:rgba(226,176,74,.3)
 .chip.on .dot{background:var(--ok);box-shadow:0 0 8px rgba(127,201,143,.6)}
 .chip.off .dot{background:var(--bad)}
 /* ---------- основная область ---------- */
-#main{flex:1;min-width:0;padding:30px 36px 70px;max-width:1280px}
+#main{flex:1;min-width:0;padding:clamp(16px,2.6vw,30px) clamp(14px,3vw,36px) 70px;max-width:1280px;width:100%}
 .page{display:none;animation:pageIn .28s var(--ease)}
 .page.active{display:block}
 @keyframes pageIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .page>header{margin-bottom:22px}
-.page h1{margin:0 0 5px;font-size:27px}
+.page h1{margin:0 0 5px;font-size:clamp(21px,2.3vw,27px)}
 .page .sub{color:var(--muted);font-size:13.5px;margin:0}
 .panel{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin-bottom:18px}
 .panel h2{margin:0 0 14px;font-size:18px}
@@ -181,7 +181,7 @@ tbody tr:last-child td{border-bottom:none}
 .st.mute{background:var(--bg3);color:var(--dim)}
 .num{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* ---------- карточки ---------- */
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(330px,100%),1fr));gap:14px;align-items:start}
 .card{background:var(--bg1);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;
   transition:border-color .18s var(--ease),transform .18s var(--ease),box-shadow .18s var(--ease)}
 .card:hover{border-color:var(--line2);transform:translateY(-2px);box-shadow:0 6px 22px rgba(0,0,0,.25)}
@@ -195,8 +195,8 @@ tbody tr:last-child td{border-bottom:none}
 .empty{color:var(--dim);text-align:center;padding:38px 20px;font-size:14px}
 .empty code{background:var(--bg2);border-radius:6px;padding:2px 8px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
 .toolbar{display:flex;gap:11px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
-.toolbar input[type=text]{max-width:340px}
-.toolbar select{width:auto;max-width:220px}
+.toolbar input[type=text]{width:min(340px,100%);min-width:150px}
+.toolbar select{width:auto;max-width:min(220px,100%)}
 /* ---------- запуски ---------- */
 .run-row{display:flex;align-items:center;gap:14px;padding:13px 16px;border:1px solid var(--line);border-radius:11px;
   background:var(--bg1);cursor:pointer;margin-bottom:9px;transition:all .17s var(--ease)}
@@ -274,6 +274,7 @@ details.adv summary:hover{color:var(--text)}
 .card .del-article:hover{color:var(--bad);background:var(--bad-bg);transform:scale(1.1)}
 .card .del-article:active{transform:scale(.95)}
 .selbar{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:13px;
+  flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 24px);
   background:var(--bg2);border:1px solid rgba(226,176,74,.45);border-radius:12px;padding:10px 18px;z-index:40;
   box-shadow:0 8px 30px rgba(0,0,0,.45),0 0 22px rgba(226,176,74,.09);animation:pageIn .22s var(--ease)}
 .selbar .sc{font-size:13.5px;font-weight:600;white-space:nowrap}
@@ -317,14 +318,27 @@ details.adv summary:hover{color:var(--text)}
 .probe-out .pk{color:var(--teal);font-family:var(--mono);font-size:12px}
 code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border-radius:8px;padding:8px 11px;
   font:11.5px/1.6 var(--mono);color:var(--muted);overflow-x:auto;white-space:pre;margin-top:9px}
+.selbar{bottom:max(18px,env(safe-area-inset-bottom))}
 @media(max-width:900px){
   #app{flex-direction:column}
   #sidebar{width:100%;height:auto;position:static;flex-direction:row;align-items:center;flex-wrap:wrap;gap:10px;padding:12px 14px}
   nav{flex-direction:row;flex-wrap:wrap}
   nav button{padding:7px 11px}
   nav button .nl{display:none}
-  .side-foot{display:none}
-  #main{padding:20px 16px 60px}
+  .side-foot{flex-direction:row;flex-wrap:wrap}
+  #main{padding:18px 14px 60px}
+}
+@media(max-width:560px){
+  .cards{grid-template-columns:1fr;gap:11px}
+  .card{padding:11px 12px}
+  .toolbar{gap:8px}
+  .toolbar input[type=text],.toolbar select{width:100%;max-width:none}
+  .expand{margin-left:0}
+  .card .actions{gap:6px}
+  .card .actions .btn.small{flex:1 1 auto;justify-content:center}
+  .supp-tools .supp-url{min-width:100%}
+  .supp-tools .btn{flex:1 1 auto;justify-content:center}
+  #toasts{left:12px;right:12px;max-width:none}
 }
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
@@ -493,6 +507,9 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
         <select id="lib-source"><option value="">все источники</option></select>
         <select id="lib-supp" title="Фильтр по наличию дополнительных материалов">
           <option value="">доп. материалы: все</option><option value="have">📎 есть</option><option value="none">📎 нет</option></select>
+        <select id="lib-sort" title="Сортировка списка статей">
+          <option value="year">сначала новые</option><option value="cited">по цитированиям</option>
+          <option value="score">по оценке релевантности</option><option value="title">по названию (А→Я)</option></select>
         <label class="hint" style="display:flex;align-items:center;gap:7px;margin:0;cursor:pointer;font-size:13px">
           <input type="checkbox" id="lib-sel-all" class="lib-check" style="margin-top:0"> выбрать все</label>
         <span class="hint" id="lib-count" style="margin:0"></span>
@@ -1050,7 +1067,7 @@ function libFiltered(){
   const q=$("#lib-q").value.trim().toLowerCase();
   const src=$("#lib-source").value;
   const sf=$("#lib-supp").value;
-  return libData.records.filter(r=>{
+  const rows=libData.records.filter(r=>{
     if(src&&!(r.sources||[]).includes(src))return false;
     if(sf==="have"&&!((r.supp||[]).length||r.has_supp===true))return false;
     if(sf==="none"&&((r.supp||[]).length||r.has_supp!==false))return false;
@@ -1058,6 +1075,12 @@ function libFiltered(){
     if(!q)return true;
     return [r.title,(r.authors||[]).join(" "),r.doi,r.pmid,r.arxiv_id,String(r.year||""),(r.tags||[]).join(" ")].join(" ").toLowerCase().includes(q);
   });
+  const mode=$("#lib-sort").value;
+  if(mode==="cited")rows.sort((a,b)=>((b.cited_by??-1)-(a.cited_by??-1))||(b.year||0)-(a.year||0));
+  else if(mode==="score")rows.sort((a,b)=>((b.score??-1)-(a.score??-1))||((b.cited_by??-1)-(a.cited_by??-1)));
+  else if(mode==="title")rows.sort((a,b)=>String(a.title||"").localeCompare(String(b.title||""),"ru"));
+  else if(mode==="year")rows.sort((a,b)=>(b.year||0)-(a.year||0)||String(a.title||"").localeCompare(String(b.title||""),"ru"));
+  return rows;
 }
 function renderLibrary(){
   const rows=libFiltered();
@@ -1110,7 +1133,7 @@ function renderLibrary(){
         <div class="cm">${esc((r.authors||[]).slice(0,3).join(", "))}${r.year?" · "+r.year:""}${r.venue?" · "+esc(r.venue):""}</div></div>
         <button type="button" class="del-article" data-del-article data-pk="${esc(r.pk)}" title="удалить статью">${TRASH_SVG}</button>
       </div>
-      <div class="metarow">${srcs}${badge}${r.is_oa?' <span class="st ok">OA</span>':""}${r.score!=null&&r.score!==""?` <span class="st info">оценка ${esc(Number(r.score).toFixed(0))}</span>`:""}${more}</div>
+      <div class="metarow">${srcs}${badge}${r.is_oa?' <span class="st ok">OA</span>':""}${r.cited_by!=null?` <span class="st mute" title="Цитирования">⮕ ${esc(r.cited_by)}</span>`:""}${r.score!=null&&r.score!==""?` <span class="st info">оценка ${esc(Number(r.score).toFixed(0))}</span>`:""}${more}</div>
       <div class="tagrow">${tags}${autoTag}${tagAdd}</div>
       <div class="actions">${r.has_file&&r.file?`<a class="btn small primary" href="${fileHref(r.file)}" target="_blank" rel="noopener">${r.file.endsWith(".xml")?"XML":"PDF"}</a>`:'<span class="st mute">файл не скачан</span>'}
       ${links.join(" ")}</div>
@@ -1159,6 +1182,7 @@ $("#lib-autotags").onclick=async()=>{
 $("#lib-q").addEventListener("input",()=>{libShown=60;renderLibrary();});
 $("#lib-source").addEventListener("change",()=>{libShown=60;renderLibrary();});
 $("#lib-supp").addEventListener("change",()=>{libShown=60;renderLibrary();});
+$("#lib-sort").addEventListener("change",()=>{libShown=60;renderLibrary();});
 $("#lib-more").onclick=()=>{libShown+=60;renderLibrary();};
 $("#lib-tags").addEventListener("click",e=>{
   const b=e.target.closest("[data-libtag]");if(!b)return;
