@@ -198,6 +198,10 @@ class Agent:
             self.log(f"  [{done_n}] {st[:60]:<12} {r.short()}")
 
         try:
+            if self.ctx.pmc:                                      # один пакетный oa.fcgi вместо запроса на каждую статью
+                pmcids = [r.pmcid for r in records if r.pmcid]
+                if pmcids:
+                    self.downloader.prefetch_pmc_oa(pmcids)
             with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="dl") as ex:
                 def fill():
                     nonlocal attempts

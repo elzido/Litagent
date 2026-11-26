@@ -316,9 +316,10 @@ details.adv summary:hover{color:var(--text)}
 .supp-url{flex:1;min-width:140px;padding:5px 10px;font-size:12.5px;border-radius:8px;background:var(--bg0);
   border:1px solid var(--line2);color:var(--text)}
 .supp-url:focus{outline:none;border-color:rgba(127,212,193,.55);box-shadow:0 0 0 3px rgba(127,212,193,.12)}
-#lib-tags{margin-bottom:10px;display:flex;flex-wrap:nowrap;gap:8px;align-items:center}
+#lib-tags{margin-bottom:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
 .tagscroll{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;flex:1;min-width:0;overflow-x:auto;
   padding-bottom:6px;scrollbar-width:thin}
+#lib-tags.open .tagscroll{flex-wrap:wrap;overflow:visible}
 #lib-tags .tchip{font-size:12px;padding:4px 11px;white-space:nowrap;flex:none}
 #lib-tags .tchip .cnt{opacity:.6;margin-left:5px;font-size:10.5px}
 #lib-tags .tag-add-btn{white-space:nowrap;flex:none}
@@ -523,7 +524,7 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
           <option value="year">сначала новые</option><option value="old">сначала старые</option>
           <option value="cited">по цитированиям</option>
           <option value="score">по оценке релевантности</option><option value="title">по названию (А→Я)</option></select>
-        <button class="btn small ghost" id="lib-citations" title="Загрузить число цитирований из OpenAlex для статей, где оно неизвестно (по DOI)">📊 цитирования</button>
+        <button class="btn small ghost" id="lib-citations" title="Загрузить число цитирований из OpenAlex для статей, где оно неизвестно (по DOI)">цитирования</button>
         <label class="hint" style="display:flex;align-items:center;gap:7px;margin:0;cursor:pointer;font-size:13px">
           <input type="checkbox" id="lib-sel-all" class="lib-check" style="margin-top:0"> выбрать все</label>
         <span class="hint" id="lib-count" style="margin:0"></span>
@@ -1081,6 +1082,7 @@ function renderTagFilter(){
   const top=sorted.slice(0,6);
   const vis=libTagsOpen?sorted:[...top,...[...libTagSel].filter(t=>!top.includes(t))];
   const chip=t=>`<button type="button" class="tchip${libTagSel.has(t)?" on":""}" data-libtag="${esc(t)}">${esc(t)}<span class="cnt">${counts[t]||0}</span></button>`;
+  c.classList.toggle("open",libTagsOpen);
   let h=`<span class="tagscroll">`+vis.map(chip).join("")+`</span>`;
   if(sorted.length>top.length)h+=`<button type="button" class="tag-add-btn" data-tagmore title="Показать все теги">${libTagsOpen?"▲ свернуть":`▼ ещё ${sorted.length-vis.length}`}</button>`;
   c.innerHTML=h;
@@ -1109,7 +1111,7 @@ function libFiltered(){
 function renderLibrary(){
   const rows=libFiltered();
   let cnt=`показано ${Math.min(libShown,rows.length)} из ${rows.length}`;
-  if($("#lib-sort").value==="cited"&&!rows.some(r=>r.cited_by!=null))cnt+=` · цитирования неизвестны — нажмите «📊 цитирования»`;
+  if($("#lib-sort").value==="cited"&&!rows.some(r=>r.cited_by!=null))cnt+=` · цитирования неизвестны — нажмите «цитирования»`;
   $("#lib-count").textContent=cnt;
   $("#lib-more").style.display=rows.length>libShown?"":"none";
   $("#lib-sel-all").checked=rows.length>0&&rows.every(r=>libSel.has(r.pk));
@@ -1229,7 +1231,7 @@ $("#lib-citations").onclick=async()=>{
     await loadLibrary();
     toast(done?`Цитирования получены для ${done} статей (OpenAlex)`:"OpenAlex не дал цитирований — уже заполнены или DOI не найдены",done?"ok":"info");
   }catch(e){toast(e.message,"bad");}
-  finally{btn.disabled=false;btn.textContent="📊 цитирования";}
+  finally{btn.disabled=false;btn.textContent="цитирования";}
 };
 $("#lib-q").addEventListener("input",()=>{libShown=60;renderLibrary();});
 $("#lib-source").addEventListener("change",()=>{libShown=60;renderLibrary();});

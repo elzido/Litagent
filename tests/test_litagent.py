@@ -1178,11 +1178,15 @@ def make_tgz(files: dict) -> bytes:
     return buf.getvalue()
 
 
-def oa_xml(pmcid, pdf=True, tgz=True):
+def oa_records(pmcid, pdf=True, tgz=True):
     n = pmcid[3:]
     links = (f'<link format="tgz" href="ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_package/aa/bb/{pmcid}.tar.gz"/>' if tgz else "") + \
             (f'<link format="pdf" href="ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/aa/bb/x.{pmcid}.pdf"/>' if pdf else "")
-    return f'<OA><records><record id="{pmcid}" license="CC BY-NC" retracted="no">{links}</record></records></OA>'.encode()
+    return f'<record id="{pmcid}" license="CC BY-NC" retracted="no">{links}</record>'
+
+
+def oa_xml(pmcid, pdf=True, tgz=True):
+    return f'<OA><records>{oa_records(pmcid, pdf, tgz)}</records></OA>'.encode()
 
 
 def pmc_router(url):
@@ -1207,7 +1211,18 @@ def pmc_router(url):
                         "333": {"title": "Base editing only in PMC", "pubdate": "2021", "authors": [], "articleids": []}}}
         return 200, {}, json.dumps(d).encode()
     if "oa.fcgi" in url:
-        pid = q["id"]
+        raw_id = q["id"]
+        if "," in raw_id:                                       # пакетный запрос (prefetch)
+            recs = ""
+            for pid in [x.strip() for x in raw_id.split(",") if x.strip()]:
+                if pid == "PMC222":
+                    recs += oa_records(pid)
+                elif pid in ("PMC333", "PMC555", "PMC660", "PMC661"):
+                    recs += oa_records(pid, pdf=False)
+            if not recs:
+                return 200, {}, b'<OA><error code="idIsNotOpenAccess">none</error></OA>'
+            return 200, {}, f"<OA><records>{recs}</records></OA>".encode()
+        pid = raw_id
         if pid == "PMC222":
             return 200, {}, oa_xml(pid)
         if pid in ("PMC333", "PMC555", "PMC660", "PMC661"):
@@ -1306,6 +1321,19 @@ class TestPmcDownload(PmcBase):
         a = self.agent()
         r = Record(title=f"Paper {pmcid} " * 3, pmcid=pmcid, is_oa=True)
         return a, r, a.downloader.fetch(r)
+
+    def test_pmc_oa_batch_prefetch(self):
+        """prefetch_pmc_oa: один пакетный oa.fcgi на несколько PMCID вместо запроса на каждую статью."""
+        a = self.agent()
+        n = a.downloader.prefetch_pmc_oa(["PMC222", "PMC660", "PMC999"])
+        self.assertEqual(n, 3)
+        calls = [u for u in PMC_CALLS if "oa.fcgi" in u]
+        self.assertEqual(len(calls), 1)                                  # ровно один запрос
+        self.assertIn("id=PMC222%2CPMC660%2CPMC999", calls[0])
+        self.assertEqual(a.downloader._pmc_oa("PMC222")[0][0], "pdf")    # из кэша, без нового запроса
+        self.assertEqual([k for k, _ in a.downloader._pmc_oa("PMC660")], ["tgz"])
+        self.assertEqual(a.downloader._pmc_oa("PMC999"), [])             # не OA — кэш пустого ответа
+        self.assertEqual(len([u for u in PMC_CALLS if "oa.fcgi" in u]), 1)
 
     def test_direct_pdf_via_oa_service_over_https(self):
         a, r, st = self.fetch("PMC222")

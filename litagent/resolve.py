@@ -6,6 +6,7 @@ import datetime
 import os
 import re
 import shutil
+import threading
 import tarfile
 import xml.etree.ElementTree as ET
 import zipfile
@@ -164,6 +165,48 @@ class Downloader:
     def __init__(self, ctx: Ctx, lib: Library, policy: Policy):
         self.ctx, self.lib, self.policy = ctx, lib, policy
         self.client: PoliteClient = ctx.client
+        self._pmc_cache: dict[str, list[tuple[str, str]]] = {}   # PMCID -> [('pdf'|'tgz', url)]: один пакетный oa.fcgi на всех
+        self._pmc_lock = threading.Lock()
+
+    def _pmc_oa_parse(self, ids: list[str]) -> dict[str, list[tuple[str, str]]]:
+        """PMC OA Web Service принимает список id через запятую — получаем ссылки для всех разом."""
+        out: dict[str, list[tuple[str, str]]] = {i: [] for i in ids}
+        try:
+            r = self.client.get(PMC_OA, {"id": ",".join(ids)})
+            if r.status != 200:
+                return out
+            root = ET.fromstring(r.text())
+        except (HttpError, Blocked, ET.ParseError, ValueError):
+            return out
+        if root.find(".//error") is not None:                    # idIsNotOpenAccess и т.п.
+            return out
+        for rec in root.iter("record"):
+            rid = (rec.get("id") or "").strip().upper()
+            if rid and not rid.startswith("PMC"):
+                rid = "PMC" + rid
+            if rid not in out or rec.get("retracted") == "yes":  # отозванная — как без ссылок
+                continue
+            links = {}
+            for ln in rec.findall("link"):
+                href = (ln.get("href") or "").replace("ftp://ftp.ncbi.nlm.nih.gov/", PMC_FTP_HTTPS, 1)
+                if ln.get("format") in ("pdf", "tgz") and href.startswith(PMC_FTP_HTTPS):
+                    links.setdefault(ln.get("format"), href)
+            out[rid] = [(k, links[k]) for k in ("pdf", "tgz") if k in links]
+        return out
+
+    def prefetch_pmc_oa(self, pmcids: list[str]) -> int:
+        """Пакетно (по 60 id) заполнить кэш PMC OA для списка записей — вместо запроса oa.fcgi на каждую статью."""
+        ids = [p for p in dict.fromkeys(pmcids) if p]
+        with self._pmc_lock:
+            todo = [i for i in ids if i not in self._pmc_cache]
+        n = 0
+        for j in range(0, len(todo), 60):
+            chunk = todo[j:j + 60]
+            res = self._pmc_oa_parse(chunk)
+            with self._pmc_lock:
+                self._pmc_cache.update(res)
+            n += len(chunk)
+        return n
 
     # --- кандидаты в порядке приоритета (лениво: Unpaywall только если прямые ссылки не сработали)
     def _unpaywall(self, doi: str) -> list[str]:
@@ -186,25 +229,15 @@ class Downloader:
 
     def _pmc_oa(self, pmcid: str) -> list[tuple[str, str]]:
         """PMC OA Web Service: [('pdf', url), ('tgz', url)] только для статей из Open Access Subset.
-        Ссылки приходят как ftp://ftp.ncbi.nlm.nih.gov/..., берём их же по https. Сайт PMC не затрагивается."""
-        try:
-            r = self.client.get(PMC_OA, {"id": pmcid})
-            if r.status != 200:
-                return []
-            root = ET.fromstring(r.text())
-        except (HttpError, Blocked, ET.ParseError, ValueError):
-            return []
-        if root.find(".//error") is not None:                    # idIsNotOpenAccess и т.п.
-            return []
-        out = {}
-        for rec in root.iter("record"):
-            if rec.get("retracted") == "yes":
-                return []
-            for ln in rec.findall("link"):
-                href = (ln.get("href") or "").replace("ftp://ftp.ncbi.nlm.nih.gov/", PMC_FTP_HTTPS, 1)
-                if ln.get("format") in ("pdf", "tgz") and href.startswith(PMC_FTP_HTTPS):
-                    out.setdefault(ln.get("format"), href)
-        return [(k, out[k]) for k in ("pdf", "tgz") if k in out]
+        Ссылки приходят как ftp://ftp.ncbi.nlm.nih.gov/..., берём их же по https. Сайт PMC не затрагивается.
+        Ответ кэшируется на весь запуск; prefetch_pmc_oa заполняет его пакетно по списку id."""
+        with self._pmc_lock:
+            if pmcid in self._pmc_cache:
+                return list(self._pmc_cache[pmcid])
+        res = self._pmc_oa_parse([pmcid]).get(pmcid, [])
+        with self._pmc_lock:
+            self._pmc_cache[pmcid] = res
+        return list(res)
 
     def candidates(self, rec: Record):
         seen = set()
