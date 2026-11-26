@@ -28,7 +28,7 @@ from .customsites import (DEFAULT_FILE as SITES_DEFAULT, CustomSource, Site, Sit
                           guess_mapping, name_error)
 from .http import Blocked, HttpError, PoliteClient
 from .llm import GIGACHAT_SCOPES
-from .models import Record, parse_topic
+from .models import Record, norm_doi, parse_topic
 from .policy import Policy
 from .resolve import Downloader
 from .sources import DEFAULT_SOURCES, SOURCE_CLASSES, Ctx
@@ -580,6 +580,8 @@ class WebApp:
         if sort == "cited":
             records.sort(key=lambda r: (-(r.get("cited_by") if isinstance(r.get("cited_by"), int) else -1),
                                         -(r.get("year") or 0), (r.get("title") or "").casefold()))
+        elif sort == "old":
+            records.sort(key=lambda r: ((r.get("year") or 0), (r.get("title") or "").casefold()))
         elif sort == "score":
             records.sort(key=lambda r: (-(r.get("score") or 0), -(r.get("cited_by") or 0), -(r.get("year") or 0)))
         elif sort == "title":
@@ -740,6 +742,51 @@ class WebApp:
         if changed:
             lib.save()
         return {"checked": checked, "supp": changed, "more": len(todo) > checked}
+
+    def post_citations(self, data: dict) -> dict:
+        """Подтянуть число цитирований (поле cited_by) записям, у которых оно пустое:
+        пакетный запрос OpenAlex по DOI. Иначе сортировка «по цитированиям» бессмысленна —
+        PubMed-источник цитирований не отдаёт."""
+        try:
+            limit = int(data.get("limit") or 50)
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 500))
+        if self.job_running():
+            return {"updated": 0, "more": True}
+        lib = Library(self.library_root())
+        cfg = self.cfg()
+        todo = [(pk, norm_doi(e.get("doi"))) for pk, e in lib.records.items()
+                if e.get("file") and norm_doi(e.get("doi")) and e.get("cited_by") is None]
+        if not todo:
+            return {"updated": 0, "more": False}
+        ua = f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})"
+        client = PoliteClient(Policy(), ua, cache_dir=None, retries=2)
+        params = {"mailto": cfg.get("email") or ""}
+        key = (cfg.get("keys") or {}).get("openalex") or ""
+        updated = 0
+        for i in range(0, min(len(todo), limit), 25):              # OpenAlex: до 50 DOI в одном фильтре
+            chunk = todo[i:i + 25]
+            p = {**params, "filter": "doi:" + "|".join(d for _, d in chunk),
+                 "per-page": str(len(chunk)), "select": "doi,cited_by_count"}
+            if key:
+                p["api_key"] = key
+            try:
+                r = client.get("https://api.openalex.org/works", p)
+                hits = {norm_doi(w.get("doi")): w.get("cited_by_count") for w in r.json().get("results", [])}
+            except Exception:  # noqa: BLE001 — сеть/формат: останавливаемся, то, что обновили, сохраняем
+                break
+            if r.status != 200:
+                break
+            changed = False
+            for pk, doi in chunk:
+                if doi in hits and hits[doi] is not None:
+                    lib.records[pk]["cited_by"] = int(hits[doi])
+                    updated += 1
+                    changed = True
+            if changed:
+                lib.save()
+        return {"updated": updated, "more": len(todo) > updated and len(todo) > limit}
 
     def post_supp_url(self, data: dict) -> dict:
         """Вручную добавить файл доп. материалов по URL."""
@@ -1090,6 +1137,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, app.post_supp_delete(data))
                 elif path == "/api/library/tags/auto":
                     self._json(200, app.post_tags_auto(data))
+                elif path == "/api/library/citations":
+                    self._json(200, app.post_citations(data))
                 elif path == "/api/runs/delete":
                     self._json(200, app.post_runs_delete(data))
                 elif path == "/api/cache/clear":
