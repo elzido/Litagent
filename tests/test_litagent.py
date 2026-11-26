@@ -1479,6 +1479,107 @@ class TestUnlimitedDownload(PmcBase):
             self.assertIn("не может быть отрицательным", str(cm.exception))
 
 
+class TestRunReport(unittest.TestCase):
+    """Отчёт запуска: параметры поиска пишутся в run.json сразу и доживают до Ctrl+C."""
+
+    def test_begin_run_writes_params_immediately(self):
+        from litagent.agent import Agent
+        from litagent.models import parse_topic
+        with tempfile.TemporaryDirectory() as d:
+            a = Agent({"out": d, "email": "t@e.org"}, lambda m: None)
+            spec = parse_topic("crispr; sickle cell")
+            params = {"mode": "manual", "sources": ["pubmed"], "topics": ["crispr; sickle cell"],
+                      "flags": {"oa_only": True}, "nums": {"limit": 50}, "cli": "python -m litagent manual -q crispr"}
+            run_dir = a.begin_run("manual", [spec], params)
+            meta = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "running")
+            self.assertEqual(meta["topics"], ["crispr; sickle cell"])
+            self.assertEqual(meta["flags"], {"oa_only": True})
+            self.assertEqual(meta["cli"], "python -m litagent manual -q crispr")
+            self.assertEqual(meta["specs"][0]["groups"], [["crispr"], ["sickle cell"]])   # многословный термин — фраза
+
+    def test_note_progress_and_partial_report(self):
+        from litagent.agent import Agent
+        from litagent.models import Record, parse_topic
+        with tempfile.TemporaryDirectory() as d:
+            a = Agent({"out": d, "email": "t@e.org"}, lambda m: None)
+            spec = parse_topic("crispr")
+            a.begin_run("manual", [spec], {"mode": "manual", "topics": ["crispr"]})
+            a.note_progress({"pdf": 3, "xml": 0, "exists": 1, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0, "supp": 0})
+            rd = a.write_partial_report("manual", [spec],
+                                        [Record(title="Interrupted paper with long title", doi="10.1/i")])
+            meta = json.loads((rd / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "interrupted")
+            self.assertEqual(meta["downloads"]["pdf"], 3)             # счётчики на момент прерывания
+            self.assertEqual(meta["total_unique"], 1)
+
+    def test_finish_keeps_params(self):
+        from litagent.agent import Agent
+        from litagent.models import parse_topic
+        with tempfile.TemporaryDirectory() as d:
+            a = Agent({"out": d, "email": "t@e.org"}, lambda m: None)
+            spec = parse_topic("crispr")
+            a.begin_run("manual", [spec], {"mode": "manual", "topics": ["crispr"], "nums": {"count": 5}})
+            rd = a.finish("manual", [spec], [], {"downloads": {"pdf": 0}})
+            meta = json.loads((rd / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "done")
+            self.assertEqual(meta["nums"], {"count": 5})              # параметры не потерялись в итоговом отчёте
+
+    def test_web_params_env_merged(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = parse_topic("crispr")
+
+            class A:
+                limit = year_from = year_to = count = None
+                oa_only = title_only = strict = pdf_only = no_download = False
+                no_pmc = flat = supplements = auto_tags = dry_run = False
+            os.environ["LITAGENT_WEB_PARAMS"] = json.dumps({"topics": ["crispr; -review"], "unlimited": True})
+            try:
+                p = cli.run_params(A(), dict(cli.DEFAULT_CFG), [spec], ["pubmed"], "manual")
+            finally:
+                os.environ.pop("LITAGENT_WEB_PARAMS", None)
+            self.assertTrue(p["web"] and p["unlimited"])              # web-ключи из формы добавлены
+            self.assertEqual(p["topics"], ["crispr"])                 # локальные значения (из argv) главнее
+
+    def test_cli_interrupt_writes_partial(self):
+        """Ctrl+C на скачивании: run.json остаётся с статусом interrupted, параметрами и счётчиками."""
+        from litagent.agent import Agent
+        with tempfile.TemporaryDirectory() as d:
+            out = []
+            a = Agent({"out": d, "email": "t@e.org"}, out.append)
+            spec = parse_topic("crispr")
+            a.begin_run("manual", [spec], {"mode": "manual", "topics": ["crispr"], "sources": ["pubmed"]})
+            recs = [Record(title=f"Interrupt report paper {i} long", arxiv_id=f"2301.{i:05d}", is_oa=True)
+                    for i in range(1, 6)]
+
+            def fake_fetch(rec, pdf_only=False, supplements=False):
+                dest = a.lib.path_for(rec, ".pdf")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(b"%PDF-1.4\n" + b"x" * 3000)
+                rec.file = str(dest.relative_to(a.lib.root))
+                return "pdf"
+
+            calls = []
+
+            def fake_wait(fs, return_when=None):
+                calls.append(1)
+                if len(calls) >= 2:
+                    raise KeyboardInterrupt
+                return cf_wait(fs, return_when=return_when)
+
+            class A:
+                limit = year_from = year_to = count = None
+                oa_only = title_only = strict = pdf_only = no_download = False
+                no_pmc = flat = supplements = auto_tags = dry_run = False
+            with mock.patch.object(a.downloader, "fetch", fake_fetch), mock.patch("litagent.agent.wait", fake_wait):
+                with self.assertRaises(KeyboardInterrupt):
+                    cli.finish_and_report(a, "manual", [spec], recs, A(), dict(cli.DEFAULT_CFG))
+            meta = json.loads((Path(d) / "runs" / a.run_id / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["status"], "interrupted")
+            self.assertEqual(meta["topics"], ["crispr"])
+            self.assertGreater(meta["downloads"]["pdf"], 0)            # что успело — в отчёте
+
+
 class TestSupplements(PmcBase):
     """Доп. материалы: извлечение из PMC-пакета, ручная докачка по URL, учёт в индексе и при удалении."""
 

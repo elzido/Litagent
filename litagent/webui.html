@@ -730,6 +730,8 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
               <label class="switch"><input type="checkbox" name="supplements"><span class="track"></span></label></div>
             <div class="togglerow"><div><div class="tl">Авто-теги по ключевым словам</div><div class="td">auto_tags — скачанным статьям проставлять теги из keywords/заголовка (ручные не перетираются)</div></div>
               <label class="switch"><input type="checkbox" name="auto_tags"><span class="track"></span></label></div>
+            <div class="togglerow"><div><div class="tl">Автопроверка доп. материалов</div><div class="td">auto_supp_check — при скачивании определять наличие приложений (Europe PMC hasSuppl, пакетно)</div></div>
+              <label class="switch"><input type="checkbox" name="auto_supp_check"><span class="track"></span></label></div>
             <div class="togglerow"><div><div class="tl">PubMed ищет и в PMC</div><div class="td">pubmed_pmc — OA-PDF через официальный OA Web Service</div></div>
               <label class="switch"><input type="checkbox" name="pubmed_pmc"><span class="track"></span></label></div>
             <div class="togglerow"><div><div class="tl">Папки источников</div><div class="td">folders_by_source — pdf/&lt;источник&gt;/</div></div>
@@ -1373,9 +1375,12 @@ async function loadRuns(){
   $("#runs-list").innerHTML=d.runs.map(r=>{
     const dl=r.downloads?`PDF ${r.downloads.pdf||0}${r.downloads.exists?` + ${r.downloads.exists} уже есть`:""}`:"без скачивания";
     const sum=r.goal||(r.topics||[]).filter(Boolean).join("; ")||"—";
+    const st=r.status==="interrupted"?'<span class="badge cancelled" title="Запуск был прерван (Ctrl+C / отмена) — сохранены параметры и то, что успело скачаться">прерван</span>'
+      :r.status==="running"&&S.job&&S.job.state==="running"?'<span class="badge running">выполняется</span>':"";
     return `<div class="run-row" data-run="${esc(r.id)}">
       <span class="badge ${esc(r.mode)}">${esc(r.mode)}</span>
       <span class="rid">${fmtRunId(r.id)}</span>
+      ${st}
       <span class="rsum">${esc(sum)}</span>
       <span class="rnum">${r.total_unique??"?"} зап. · ${dl}</span>
       <button type="button" class="run-del" data-del-run="${esc(r.id)}" title="удалить запуск">${TRASH_SVG}</button></div>`;
@@ -1404,12 +1409,27 @@ async function openRun(id){
   const m=run.meta,d=m.downloads||{},http=m.http||{};
   let h=`<div class="meta-grid">
     <div class="meta"><div class="mk">Запуск</div><div class="mv">${fmtRunId(id)}</div></div>
-    <div class="meta"><div class="mk">Режим</div><div class="mv">${esc(m.mode||"?")}</div></div>
+    <div class="meta"><div class="mk">Режим</div><div class="mv">${esc(m.mode||"?")}${m.status==="interrupted"?' <span class="badge cancelled">прерван</span>':""}</div></div>
     <div class="meta"><div class="mk">Уникальных записей</div><div class="mv">${m.total_unique??0}</div></div>
     <div class="meta"><div class="mk">HTTP-запросов</div><div class="mv">${http.requests??"?"}${http.retries?` (повторов ${http.retries})`:""}</div></div>`;
-  if(m.downloads)h+=`<div class="meta"><div class="mk">Скачано</div><div class="mv">PDF ${d.pdf||0}${d.exists?` + ${d.exists} уже есть`:""}${d.xml?`, XML ${d.xml}`:""}</div></div>`;
+  if(m.downloads)h+=`<div class="meta"><div class="mk">Скачано</div><div class="mv">PDF ${d.pdf||0}${d.exists?` + ${d.exists} уже есть`:""}${d.xml?`, XML ${d.xml}`:""}${d.supp?`, доп. ${d.supp}`:""}</div></div>`;
   if(m.target)h+=`<div class="meta"><div class="mk">Цель по PDF</div><div class="mv">${m.target.reached} из ${m.target.requested}</div></div>`;
   h+="</div>";
+  if(m.topics||m.sources||m.flags||m.nums){
+    const FLAGS={"oa_only":"только OA","title_only":"только названия","strict":"строго","pdf_only":"только PDF",
+      "no_download":"только найти","no_pmc":"без PMC","flat":"без папок","supplements":"доп. материалы",
+      "auto_tags":"авто-теги","dry_run":"dry-run","unlimited":"скачать всё"};
+    const nums=(m.nums||{}), nf=["limit","year_from","year_to","count","max_downloads","workers","deepen_rounds"]
+      .filter(k=>nums[k]!==undefined&&nums[k]!==null).map(k=>`${k}=${nums[k]}`).join(" · ");
+    const fl=Object.keys(m.flags||{}).map(k=>FLAGS[k]||k).join(" · ");
+    h+=`<div class="panel"><h2>Параметры поиска</h2><div class="meta-grid">
+      <div class="meta"><div class="mk">Темы</div><div class="mv">${(m.topics||[]).map(t=>`<span class="src-tag">${esc(t)}</span>`).join(" ")||"—"}</div></div>
+      <div class="meta"><div class="mk">Источники</div><div class="mv">${(m.sources||[]).map(s=>`<span class="src-tag">${esc(s)}</span>`).join(" ")||"—"}</div></div>
+      ${fl?`<div class="meta"><div class="mk">Режимы</div><div class="mv">${esc(fl)}</div></div>`:""}
+      ${nf?`<div class="meta"><div class="mk">Числа</div><div class="mv num">${esc(nf)}</div></div>`:""}
+    </div>${m.cli?`<code class="cli">${esc(m.cli)}</code>`:""}
+    ${m.topics&&m.topics.length?`<div class="launch" style="margin-top:10px"><button class="btn small" id="run-repeat">Повторить этот поиск</button></div>`:""}</div>`;
+  }
   if(m.goal)h+=`<div class="panel"><h2>Цель</h2><p style="margin:0">${esc(m.goal)}</p></div>`;
   if(m.rounds&&m.rounds.length){
     h+='<div class="panel"><h2>Раунды плана</h2>'+m.rounds.map(r=>
@@ -1429,6 +1449,19 @@ async function openRun(id){
   }
   h+='<div class="panel"><h2>Найденные записи</h2>'+resultsTable(run.results)+"</div>";
   $("#run-body").innerHTML=h;
+  const rep=$("#run-repeat");
+  if(rep)rep.onclick=()=>{
+    showPage("search");
+    if(m.mode==="auto"&&m.goal)$("#a-goal").value=m.goal;
+    else if(m.topics&&m.topics.length)$("#m-topics").value=m.topics.join("\n");
+    if(m.sources&&m.sources.length)$$(".chips [data-src]").forEach(b=>b.classList.toggle("on",m.sources.includes(b.dataset.src)));
+    const n=m.nums||{};
+    if(n.year_from)$("#m-year-from").value=n.year_from;
+    if(n.year_to)$("#m-year-to").value=n.year_to;
+    if(n.limit)$("#m-limit").value=n.limit;
+    if(n.count)$("#m-count").value=n.count;
+    toast("Параметры запуска подставлены в форму поиска","ok");
+  };
 }
 
 /* ---------- пресеты ---------- */
@@ -1622,7 +1655,7 @@ async function loadConfig(){
   const c=d.cfg;
   for(const k of ["email","out","custom_sites","presets_file","limit_per_source","max_downloads","download_workers",
     "download_timeout","download_retries","cache_ttl","deepen_rounds","deepen_limit_cap","pdf_only","pubmed_pmc",
-    "folders_by_source","supplements","auto_tags"])cfgSet(k,c[k]);
+    "folders_by_source","supplements","auto_tags","auto_supp_check"])cfgSet(k,c[k]);
   for(const sec of ["keys","llm","auto","web"])for(const k of Object.keys(c[sec]||{}))cfgSet(`${sec}.${k}`,c[sec][k]);
   sourceChips("#cfg-sources",c.sources||[]);
   $$("#cfg-form .env-badge").forEach(b=>b.remove());

@@ -239,6 +239,27 @@ class Downloader:
             self._pmc_cache[pmcid] = res
         return list(res)
 
+    def prefetch_supp_flags(self, pmcids: list[str]) -> dict[str, bool]:
+        """Один пакетный lite-запрос Europe PMC (PMCID:a OR PMCID:b …) на признак hasSuppl для всех статей."""
+        out: dict[str, bool] = {}
+        ids = [p for p in dict.fromkeys(pmcids) if p]
+        for j in range(0, len(ids), 50):
+            chunk = ids[j:j + 50]
+            try:
+                r = self.client.get(EUPMC_SEARCH, {"query": " OR ".join(f"PMCID:{p}" for p in chunk),
+                                                   "format": "json", "resultType": "lite",
+                                                   "pageSize": str(len(chunk))})
+                if r.status != 200:
+                    continue
+                res = (r.json().get("resultList") or {}).get("result") or []
+            except (HttpError, Blocked, ValueError):
+                continue
+            for item in res:
+                pid = (item.get("pmcid") or "").upper()
+                if pid:
+                    out[pid] = item.get("hasSuppl") == "Y"
+        return out
+
     def candidates(self, rec: Record):
         seen = set()
 

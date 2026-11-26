@@ -12,6 +12,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -99,6 +100,7 @@ COMMENTS = {
     "pdf_only": "true: оставлять только статьи с реально скачанным PDF (как --pdf-only)",
     "supplements": "true: докачивать доп. материалы статей (приложения, данные) в supp/<статья>/ (как --supplements)",
     "auto_tags": "true: проставлять скачанным статьям теги по их ключевым словам (как --auto-tags; ручные теги не перетираются)",
+    "auto_supp_check": "true: при скачивании автоматически определять наличие доп. материалов (пакетный Europe PMC hasSuppl) — по умолчанию включено",
     "pubmed_pmc": "PubMed ищет ещё и в PMC и качает оттуда OA-PDF (false — выключить)",
     "custom_sites": "свои сайты (создаётся командой `sites add`)",
     "max_downloads": "потолок успешных скачиваний за запуск (--max-downloads; 0 — без потолка: качать все найденные)",
@@ -249,8 +251,9 @@ def validate_config(data: dict, known_sources: list[str], base: dict | None = No
 
 # ---------------------------------------------------------------- фоновые задачи (запуски CLI)
 class Job:
-    def __init__(self, jid: str, kind: str, argv: list[str], title: str):
+    def __init__(self, jid: str, kind: str, argv: list[str], title: str, params: dict | None = None):
         self.id, self.kind, self.argv, self.title = jid, kind, argv, title
+        self.params = params or {}                       # форма запуска: пишется в run.json при старте CLI
         self.started = datetime.datetime.now().isoformat(timespec="seconds")
         self.finished: str | None = None
         self.state = "running"                     # running | done | error | cancelled
@@ -275,11 +278,11 @@ class JobManager:
         self.current: Job | None = None
         self.history: list[Job] = []
 
-    def start(self, kind: str, argv: list[str], title: str) -> Job:
+    def start(self, kind: str, argv: list[str], title: str, params: dict | None = None) -> Job:
         with self.lock:
             if self.current and self.current.state == "running":
                 raise ApiError(409, f"Уже идёт задача «{self.current.title}» — дождитесь окончания или отмените её.")
-            job = Job(datetime.datetime.now().strftime("%H%M%S-") + str(len(self.history)), kind, argv, title)
+            job = Job(datetime.datetime.now().strftime("%H%M%S-") + str(len(self.history)), kind, argv, title, params)
             self.current = job
             self.history.append(job)
             self.history = self.history[-30:]
@@ -287,9 +290,12 @@ class JobManager:
         return job
 
     def _run(self, job: Job) -> None:
+        env = dict(os.environ)
+        if job.params:                                 # форма поиска -> run.json CLI-процесса (даже при отмене)
+            env["LITAGENT_WEB_PARAMS"] = json.dumps(job.params, ensure_ascii=False)
         try:
             proc = subprocess.Popen(job.argv, cwd=self.cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, encoding="utf-8", errors="replace")
+                                    text=True, encoding="utf-8", errors="replace", env=env)
         except OSError as e:
             with self.lock:
                 job.lines.append(f"Не удалось запустить: {e}")
@@ -462,6 +468,19 @@ def build_search_argv(p: dict, cfg: dict, known: list[str], forbidden: dict, con
     raise ApiError(400, f"Неизвестный режим: {mode}")
 
 
+def web_search_params(p: dict, argv: list[str]) -> dict:
+    """Параметры запуска из формы поиска — пишутся в run.json CLI-процесса (через окружение)."""
+    out = {"mode": p.get("mode") or "manual", "cli": "python -m litagent " + " ".join(shlex.quote(x) for x in argv)}
+    for k in ("topics", "preset", "group", "exclude", "arxiv_cats", "sources", "goal", "min_score"):
+        if p.get(k):
+            out[k] = p[k]
+    for k in ("year_from", "year_to", "limit", "count", "max_downloads", "workers", "rounds", "min_results"):
+        if p.get(k) not in (None, ""):
+            out[k] = p[k]
+    out.update({k: True for k, v in p.items() if v is True and k not in out})
+    return out
+
+
 # ---------------------------------------------------------------- приложение (логика API)
 class WebApp:
     def __init__(self, config_path: str | Path | None = None, cwd: str | Path | None = None):
@@ -545,7 +564,7 @@ class WebApp:
         cfg = self.cfg()
         pol = Policy()
         argv, kind, title = build_search_argv(p, cfg, self.known_sources(), pol.forbidden_sources, self.config_path)
-        job = self.jobs.start(kind, [sys.executable, "-m", "litagent", *argv], title)
+        job = self.jobs.start(kind, [sys.executable, "-m", "litagent", *argv], title, web_search_params(p, argv))
         return {"job": job.summary()}
 
     def post_check(self) -> dict:
@@ -836,9 +855,10 @@ class WebApp:
                     continue
                 meta = _read_json(p / "run.json") or {}
                 out.append({"id": p.name, "mode": meta.get("mode", "?"), "started": meta.get("started", ""),
+                            "status": meta.get("status", ""),
                             "total_unique": meta.get("total_unique"), "downloads": meta.get("downloads"),
                             "goal": meta.get("goal", ""), "target": meta.get("target"),
-                            "topics": [s.get("label", "") for s in meta.get("specs", [])][:5]})
+                            "topics": meta.get("topics") or [s.get("label", "") for s in meta.get("specs", [])][:5]})
                 if len(out) >= 200:
                     break
         return {"runs": out}

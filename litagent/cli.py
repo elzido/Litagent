@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import copy
 import json
 import os
+import shlex
 import sys
 import time
 import tomllib
@@ -28,7 +30,7 @@ from .wizard import interview
 DEFAULT_CFG = {
     "email": "", "tool": "litagent", "out": "library", "sources": DEFAULT_SOURCES,
     "limit_per_source": 50, "max_downloads": 20, "cache_ttl": 86400, "custom_sites": DEFAULT_FILE, "pubmed_pmc": True, "pdf_only": False,
-    "supplements": False, "auto_tags": False,
+    "supplements": False, "auto_tags": False, "auto_supp_check": True,
     "deepen_rounds": 5, "deepen_limit_cap": 1000, "folders_by_source": True, "presets_file": presets.DEFAULT_FILE,
     "download_workers": 10, "download_timeout": 25, "download_retries": 2,
     "keys": {"ncbi": "", "openalex": "", "s2": "", "core": "", "gigachat": "",
@@ -194,7 +196,42 @@ def need_email(cfg: dict) -> bool:
     return False
 
 
+def run_params(a, cfg, specs, names, mode, goal=None) -> dict:
+    """Параметры запуска для отчёта runs/<id>/run.json: темы, источники, годы, лимиты, режимы + команда целиком."""
+    flags = {f: True for f in ("oa_only", "title_only", "strict", "pdf_only", "no_download", "no_pmc", "flat",
+                               "supplements", "auto_tags") if getattr(a, f, False)}
+    nums = {k: v for k, v in (("limit", getattr(a, "limit", None) or cfg.get("limit_per_source")),
+                              ("year_from", getattr(a, "year_from", None)),
+                              ("year_to", getattr(a, "year_to", None)),
+                              ("count", getattr(a, "count", None)),
+                              ("max_downloads", cfg.get("max_downloads")),
+                              ("workers", cfg.get("download_workers")),
+                              ("deepen_rounds", cfg.get("deepen_rounds"))) if v not in (None, "")}
+    p = {"mode": mode, "sources": list(names), "flags": flags, "nums": nums,
+         "topics": [sp.label for sp in specs if getattr(sp, "label", "")] or [sp.describe() for sp in specs],
+         "cli": "python -m litagent " + " ".join(shlex.quote(x) for x in sys.argv[1:])}
+    if goal:
+        p["goal"] = goal
+    try:                                        # запуск из веб-морды: форма богаче, чем argv (--count, группы…)
+        wp = json.loads(os.environ.get("LITAGENT_WEB_PARAMS") or "{}")
+        if isinstance(wp, dict):
+            wp["web"] = True
+            p = {**wp, **p}
+    except ValueError:
+        pass
+    return p
+
+
 def finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=None, more=None) -> int:
+    try:
+        return _finish_and_report(agent, mode, specs, records, args, cfg, extra, more)
+    except KeyboardInterrupt:
+        # прерванный запуск тоже остаётся в отчёте: параметры, запросы и всё, что успело скачаться
+        log(f"Отчёт прерванного запуска: {agent.write_partial_report(mode, specs, records)}")
+        raise
+
+
+def _finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=None, more=None) -> int:
     counts = None
     records = agent.rank(records)
     log(f"\nУникальных записей: {len(records)}")
@@ -311,9 +348,14 @@ def cmd_manual(a) -> int:
         return 0
     if not need_email(cfg) or not names:
         return 2
+    agent.begin_run("manual", specs, run_params(a, cfg, specs, names, "manual"))
     limit = a.limit or cfg["limit_per_source"]
     log(f"Ручной режим: {len(specs)} запрос(ов), источники: {', '.join(names)}, лимит {limit}/источник")
-    records = agent.search(specs, names, limit)
+    try:
+        records = agent.search(specs, names, limit)
+    except KeyboardInterrupt:
+        agent.write_partial_report("manual", specs, [])          # параметры и запросы сохранятся даже при Ctrl+C на поиске
+        raise
     more = make_deepener(agent, specs, names, limit, cfg)
     return finish_and_report(agent, "manual", specs, records, a, cfg, more=more)
 
@@ -383,9 +425,16 @@ def cmd_auto(a) -> int:
         return 0
     if not need_email(cfg) or not names:
         return 2
+    agent.begin_run("auto", [], run_params(a, cfg, [], names, "auto", goal))
     au = cfg["auto"]
-    records, specs, plan_log = auto_search(agent, llm, notes, goal, names, defaults,
-                                           rounds=a.rounds or au["rounds"], min_results=a.min_results or au["min_results"], log=log)
+    try:
+        records, specs, plan_log = auto_search(agent, llm, notes, goal, names, defaults,
+                                               rounds=a.rounds or au["rounds"], min_results=a.min_results or au["min_results"], log=log)
+    except KeyboardInterrupt:
+        agent.write_partial_report("auto", [], [])
+        raise
+    agent.update_run({"specs": [dataclasses.asdict(s) for s in specs], "rounds": plan_log,
+                      "topics": [s.label for s in specs if s.label] or [s.describe() for s in specs]})
     if llm and (a.llm_filter or au.get("llm_filter")) and records:
         thr = a.min_score if a.min_score is not None else au["min_score"]
         log(f"\nФильтр релевантности LLM (порог {thr}) для {len(records)} записей…")
