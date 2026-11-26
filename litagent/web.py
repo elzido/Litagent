@@ -674,16 +674,48 @@ class WebApp:
         if not isinstance(pk, str):
             raise ApiError(400, "Ожидается {pk: строка}.")
         lib, rec = self._library_record(pk)
-        cfg = self.cfg()
-        pol = Policy()
-        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
-                              cache_dir=lib.cache_dir, retries=2)
-        ctx = Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None,
-                  pmc=bool(cfg.get("pubmed_pmc", True)))
-        found = Downloader(ctx, lib, pol).check_supplements(rec)
+        found = self._supp_downloader(lib).check_supplements(rec)
         lib.register(rec)
         lib.save()
         return {"pk": pk, "has_supp": found}
+
+    def _supp_downloader(self, lib: Library) -> Downloader:
+        cfg = self.cfg()
+        pol = Policy()
+        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
+                              cache_dir=lib.cache_dir, retries=2,
+                              download_timeout=int(cfg.get("download_timeout", 25)),
+                              download_retries=int(cfg.get("download_retries", 2)))
+        return Downloader(Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None,
+                              pmc=bool(cfg.get("pubmed_pmc", True))), lib, pol)
+
+    def post_supp_scan(self, data: dict) -> dict:
+        """Автопроверка «есть ли доп. материалы» у статей, где статус неизвестен (Europe PMC lite, кэш).
+        {limit: N} — сколько записей проверить за вызов."""
+        try:
+            limit = int(data.get("limit") or 30)
+        except (TypeError, ValueError):
+            limit = 30
+        limit = max(1, min(limit, 200))
+        lib = Library(self.library_root())
+        todo = [(pk, e) for pk, e in lib.records.items()
+                if e.get("file") and e.get("has_supp") is None and (e.get("pmcid") or e.get("supp_urls"))]
+        dl = self._supp_downloader(lib)
+        checked, changed = 0, {}
+        for pk, e in todo:
+            if len(changed) >= limit:
+                break
+            try:
+                res = dl.check_supplements(Record.from_dict(e))
+            except Exception:  # noqa: BLE001 — сбой одной проверки не валит весь скан
+                continue
+            checked += 1
+            if res is not None:
+                e["has_supp"] = bool(res)
+                changed[pk] = bool(res)
+        if changed:
+            lib.save()
+        return {"checked": checked, "supp": changed, "more": len(todo) > checked}
 
     def post_supp_url(self, data: dict) -> dict:
         """Вручную добавить файл доп. материалов по URL."""
@@ -1024,6 +1056,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, app.post_supp_fetch(data))
                 elif path == "/api/library/supplements/check":
                     self._json(200, app.post_supp_check(data))
+                elif path == "/api/library/supplements/scan":
+                    self._json(200, app.post_supp_scan(data))
                 elif path == "/api/library/supplements/url":
                     self._json(200, app.post_supp_url(data))
                 elif path == "/api/library/supplements/delete":

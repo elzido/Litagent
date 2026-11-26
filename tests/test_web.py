@@ -517,6 +517,27 @@ class TestSupplementsApi(Tmp):
         m.assert_called_once()
         self.assertEqual(r["added"], 2)
 
+    def test_supp_scan_updates_index(self):
+        from litagent.resolve import Downloader
+        lib = self.write_index()
+        (lib / "index.json").write_text(json.dumps({"records": {"doi:10.1/x": {
+            "title": "CRISPR therapy", "doi": "10.1/x", "pmcid": "PMC9", "sources": ["pubmed"],
+            "file": "pdf/pubmed/Smith_2022_Test_1a2b3c4d.pdf", "supp": []}}, "aliases": {}}), encoding="utf-8")
+        with mock.patch.object(Downloader, "check_supplements", return_value=True) as m:
+            r = self.app.post_supp_scan({"limit": 10})
+        m.assert_called_once()
+        self.assertEqual((r["checked"], r["supp"]), (1, {"doi:10.1/x": True}))
+        self.assertTrue(self.app.get_library()["records"][0]["has_supp"])
+        with mock.patch.object(Downloader, "check_supplements") as m:   # статус известен — не перепроверяем
+            r2 = self.app.post_supp_scan({})
+        m.assert_not_called()
+        self.assertEqual(r2["checked"], 0)
+
+    def test_supp_scan_skips_records_without_pmcid(self):
+        self.write_index()                                              # запись без pmcid/supp_urls
+        r = self.app.post_supp_scan({})
+        self.assertEqual((r["checked"], r["supp"]), (0, {}))
+
 
 class TestTagsApi(Tmp):
     def test_tags_auto_single_and_all(self):

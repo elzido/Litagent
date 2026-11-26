@@ -491,6 +491,8 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
       <div class="toolbar">
         <input type="text" id="lib-q" placeholder="Фильтр: название, автор, DOI, тег…">
         <select id="lib-source"><option value="">все источники</option></select>
+        <select id="lib-supp" title="Фильтр по наличию дополнительных материалов">
+          <option value="">доп. материалы: все</option><option value="have">📎 есть</option><option value="none">📎 нет</option></select>
         <label class="hint" style="display:flex;align-items:center;gap:7px;margin:0;cursor:pointer;font-size:13px">
           <input type="checkbox" id="lib-sel-all" class="lib-check" style="margin-top:0"> выбрать все</label>
         <span class="hint" id="lib-count" style="margin:0"></span>
@@ -853,16 +855,17 @@ $$("#m-flags,#a-flags").forEach(c=>c.addEventListener("click",e=>{
   syncUnlimited(c.id);
 }));
 function syncUnlimited(cid){
-  const pref=cid==="m-flags"?"#m-":"#a-";
-  const chip=$(cid+" [data-flag='unlimited']");
-  const on=chip&&chip.classList.contains("on");
-  [pref+"max-downloads",pref+"count"].forEach(id=>{
+  const pref=cid==="m-flags"?"m":"a";
+  const chip=$("#"+cid+" [data-flag='unlimited']");
+  const on=!!(chip&&chip.classList.contains("on"));
+  ["#"+pref+"-max-downloads","#"+pref+"-count"].forEach(id=>{
     const el=$(id);if(!el)return;
     el.disabled=on;
-    el.closest(".field")?.classList.toggle("disabled-field",on);
+    const fld=el.closest(".field")||el.parentElement;
+    if(fld)fld.classList.toggle("disabled-field",on);
     if(on)el.value="";
   });
-  const nd=$(cid+" [data-flag='no_download']");
+  const nd=$("#"+cid+" [data-flag='no_download']");
   if(on&&nd&&nd.classList.contains("on"))nd.classList.remove("on");
 }
 async function loadSearch(){
@@ -1015,6 +1018,24 @@ async function loadLibrary(){
   sel.value=cur;
   renderTagFilter();
   renderLibrary();
+  autoScanSupps();
+}
+let suppScanBusy=false;
+async function autoScanSupps(){
+  if(suppScanBusy)return;
+  if(!libData.records.some(r=>r.has_file&&r.has_supp==null&&(r.pmcid||(r.supp_urls||[]).length)))return;
+  suppScanBusy=true;
+  try{
+    let rounds=0;
+    while(rounds++<4){
+      const r=await api("/api/library/supplements/scan",{method:"POST",body:JSON.stringify({limit:12})});
+      let hit=0;
+      for(const [pk,v] of Object.entries(r.supp||{})){const rec=libData.records.find(x=>x.pk===pk);if(rec){rec.has_supp=v;if(v)hit++;}}
+      if(hit)renderLibrary();
+      if(!r.more)break;
+    }
+  }catch(e){/* автопроверка не должна мешать: руки — кнопка «проверить наличие» */}
+  finally{suppScanBusy=false;}
 }
 function renderTagFilter(){
   const tags=libData.all_tags||[];
@@ -1028,8 +1049,11 @@ function renderTagFilter(){
 function libFiltered(){
   const q=$("#lib-q").value.trim().toLowerCase();
   const src=$("#lib-source").value;
+  const sf=$("#lib-supp").value;
   return libData.records.filter(r=>{
     if(src&&!(r.sources||[]).includes(src))return false;
+    if(sf==="have"&&!((r.supp||[]).length||r.has_supp===true))return false;
+    if(sf==="none"&&((r.supp||[]).length||r.has_supp!==false))return false;
     if(libTagSel.size&&!(r.tags||[]).some(t=>libTagSel.has(t)))return false;
     if(!q)return true;
     return [r.title,(r.authors||[]).join(" "),r.doi,r.pmid,r.arxiv_id,String(r.year||""),(r.tags||[]).join(" ")].join(" ").toLowerCase().includes(q);
@@ -1051,11 +1075,12 @@ function renderLibrary(){
     if(r.doi)links.push(`<a href="https://doi.org/${esc(r.doi)}" target="_blank" rel="noopener">DOI</a>`);
     if(r.url)links.push(`<a href="${esc(r.url)}" target="_blank" rel="noopener">страница</a>`);
     const nSupp=(r.supp||[]).length;
-    const known=r.has_supp===true, unknown=r.has_supp===null&&!!r.pmcid;
-    const badge=nSupp?`<span class="st teal" title="Доп. материалы скачаны: ${nSupp}">доп. ${nSupp}</span>`
-      :known?`<span class="st teal" title="По источникам у статьи есть доп. материалы">доп. есть</span>`:"";
+    const known=r.has_supp===true, unknown=r.has_supp===null&&!!(r.pmcid||(r.supp_urls||[]).length);
+    const badge=nSupp?`<span class="st teal" title="Доп. материалы скачаны: ${nSupp}">📎 доп. ${nSupp}</span>`
+      :known?`<span class="st teal" title="У статьи есть доп. материалы (не скачаны)">📎 доп.</span>`
+      :unknown?`<span class="st mute" title="Наличие доп. материалов не проверялось">📎 ?</span>`:"";
     const canFold=(r.has_file&&(nSupp||known||unknown))||r.abstract;
-    const more=canFold?
+    const more=canFold||open?
       `<button type="button" class="expand" data-expand data-pk="${esc(r.pk)}" aria-expanded="${open?"true":"false"}">${open?"▲ свернуть":`▼ ${nSupp||known?`доп. материалы${nSupp?` (${nSupp})`:""}`:"подробнее"}`}</button>`:"";
     const tags=(r.tags||[]).map(t=>`<span class="tagchip">${esc(t)}<button type="button" data-tag-remove data-pk="${esc(r.pk)}" data-tag="${esc(t)}" title="убрать тег">×</button></span>`).join("");
     const tagAdd=tagInputPk===r.pk
@@ -1130,6 +1155,7 @@ $("#lib-autotags").onclick=async()=>{
 };
 $("#lib-q").addEventListener("input",()=>{libShown=60;renderLibrary();});
 $("#lib-source").addEventListener("change",()=>{libShown=60;renderLibrary();});
+$("#lib-supp").addEventListener("change",()=>{libShown=60;renderLibrary();});
 $("#lib-more").onclick=()=>{libShown+=60;renderLibrary();};
 $("#lib-tags").addEventListener("click",e=>{
   const b=e.target.closest("[data-libtag]");if(!b)return;
