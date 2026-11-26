@@ -18,7 +18,7 @@
   --mono:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace;
 }
 *{box-sizing:border-box}
-html,body{margin:0;padding:0}
+html,body{margin:0;padding:0;color-scheme:dark}
 body{background:var(--bg0);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   background-image:radial-gradient(1100px 500px at 85% -10%,rgba(226,176,74,.05),transparent 60%),
                    radial-gradient(900px 600px at -10% 110%,rgba(143,184,232,.04),transparent 55%);}
@@ -86,6 +86,12 @@ input[type=text],input[type=number],input[type=password],input[type=email],texta
 textarea{resize:vertical;min-height:74px}
 input:focus,textarea:focus,select:focus{outline:none;border-color:rgba(226,176,74,.6);box-shadow:0 0 0 3px rgba(226,176,74,.12)}
 input::placeholder,textarea::placeholder{color:var(--dim)}
+/* стрелки спиннеров (числа: год, лимиты…) и шеврон select — тусклые, не белые */
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{opacity:.4}
+input[type=number]:hover::-webkit-inner-spin-button,input[type=number]:focus::-webkit-inner-spin-button{opacity:.7}
+select{appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
 .env-badge{font-size:10.5px;background:var(--info-bg);color:var(--info);border-radius:999px;padding:1px 8px;font-weight:500}
 .pw-wrap{position:relative}
 .pw-wrap input{padding-right:38px}
