@@ -626,8 +626,6 @@ class WebApp:
 
     def post_tags_auto(self, data: dict) -> dict:
         """Теги по ключевым словам: одной записи (pk) или всех без тегов (all=true)."""
-        if self.job_running():
-            raise ApiError(409, "Идёт запуск — теги проставлю по его окончании.")
         lib = Library(self.library_root())
         if data.get("all"):
             touched = 0
@@ -682,8 +680,6 @@ class WebApp:
 
     def post_supp_fetch(self, data: dict) -> dict:
         """Автоматически докачать доп. материалы статьи (PMC-пакет и Europe PMC)."""
-        if self.job_running():
-            raise ApiError(409, "Дождитесь окончания запуска — он сейчас скачивает статьи.")
         pk = data.get("pk")
         if not isinstance(pk, str):
             raise ApiError(400, "Ожидается {pk: строка}.")
@@ -711,8 +707,6 @@ class WebApp:
 
     def post_supp_check(self, data: dict) -> dict:
         """Есть ли у статьи доп. материалы (дешёвый lite-запрос Europe PMC, кэшируется)."""
-        if self.job_running():
-            raise ApiError(409, "Идёт запуск — проверка займётся по его окончании.")
         pk = data.get("pk")
         if not isinstance(pk, str):
             raise ApiError(400, "Ожидается {pk: строка}.")
@@ -740,8 +734,6 @@ class WebApp:
         except (TypeError, ValueError):
             limit = 30
         limit = max(1, min(limit, 200))
-        if self.job_running():
-            return {"checked": 0, "supp": {}, "more": True}   # во время запуска не трогаем общий index.json
         lib = Library(self.library_root())
         todo = [(pk, e) for pk, e in lib.records.items()
                 if e.get("file") and e.get("has_supp") is None and (e.get("pmcid") or e.get("supp_urls"))]
@@ -809,8 +801,6 @@ class WebApp:
 
     def post_supp_url(self, data: dict) -> dict:
         """Вручную добавить файл доп. материалов по URL."""
-        if self.job_running():
-            raise ApiError(409, "Дождитесь окончания запуска.")
         pk, url = data.get("pk"), (data.get("url") or "").strip()
         if not isinstance(pk, str) or not url:
             raise ApiError(400, "Ожидается {pk: строка, url: строка}.")

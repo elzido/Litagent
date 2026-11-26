@@ -517,6 +517,28 @@ class TestSupplementsApi(Tmp):
         m.assert_called_once()
         self.assertEqual(r["added"], 2)
 
+    def test_supp_actions_work_while_job_running(self):
+        """Докачка/проверка доп. материалов не блокируются идущим запуском (иначе кнопка «бесполезна»)."""
+        from litagent.resolve import Downloader
+        self.write_supp()
+        self.app.jobs.current = type("J", (), {"state": "running", "title": "чужой запуск"})()
+        with mock.patch.object(Downloader, "check_supplements", return_value=True):
+            self.assertTrue(self.app.post_supp_check({"pk": "doi:10.1/x"})["has_supp"])
+        with mock.patch.object(Downloader, "check_supplements", return_value=True), \
+             mock.patch.object(Downloader, "fetch_supplements", return_value=1) as m:
+            self.assertEqual(self.app.post_supp_fetch({"pk": "doi:10.1/x"})["added"], 1)
+        m.assert_called_once()
+        self.assertTrue(self.app.post_tags_auto({"pk": "doi:10.1/x"})["tags"] is not None)
+
+    def test_delete_still_blocked_while_job_running(self):
+        """Удаление статей и массовые цитирования во время запуска остаются под защитой."""
+        self.write_index()
+        self.app.jobs.current = type("J", (), {"state": "running", "title": "запуск"})()
+        with self.assertRaises(ApiError) as cm:
+            self.app.post_library_delete({"keys": ["doi:10.1/x"]})
+        self.assertEqual(cm.exception.code, 409)
+        self.assertEqual(self.app.post_citations({}), {"updated": 0, "more": True})
+
     def test_supp_scan_updates_index(self):
         from litagent.resolve import Downloader
         lib = self.write_index()

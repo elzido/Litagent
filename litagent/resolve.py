@@ -392,29 +392,34 @@ class Downloader:
 
     def check_supplements(self, rec: Record) -> bool | None:
         """Есть ли у статьи доп. материалы: сначала ссылки, которые дал источник (в т.ч. свой сайт),
-        иначе — дешёвый lite-запрос к Europe PMC (ответ попадает в HTTP-кэш) + признак OA-пакета PMC.
-        None — проверить нельзя."""
+        иначе — дешёвый lite-запрос к Europe PMC (по PMCID, а если его нет — по DOI; ответ в HTTP-кэше)
+        + признак OA-пакета PMC. None — проверить нельзя."""
         if rec.supp_urls:
             rec.has_supp = True
             return True
         if rec.has_supp is not None:
             return bool(rec.has_supp)
-        if not rec.pmcid:
+        query = f"PMCID:{rec.pmcid}" if rec.pmcid else (f'DOI:"{rec.doi}"' if rec.doi else "")
+        if not query:
             return None
         try:
-            r = self.client.get(EUPMC_SEARCH, {"query": f"PMCID:{rec.pmcid}", "format": "json",
+            r = self.client.get(EUPMC_SEARCH, {"query": query, "format": "json",
                                                "resultType": "lite", "pageSize": 1})
             if r.status == 200:
                 res = (r.json().get("resultList") or {}).get("result") or []
                 if res:
+                    pid = (res[0].get("pmcid") or "").upper()
+                    if pid.startswith("PMC") and not rec.pmcid:
+                        rec.pmcid = pid                    # Europe PMC дал PMCID — им и будем качать пакет
                     rec.has_supp = res[0].get("hasSuppl") == "Y"
                     return bool(rec.has_supp)
         except (HttpError, Blocked, ValueError):
             pass
-        for kind, _ in self._pmc_oa(rec.pmcid):
-            if kind == "tgz":
-                rec.has_supp = True
-                return True
+        if rec.pmcid:
+            for kind, _ in self._pmc_oa(rec.pmcid):
+                if kind == "tgz":
+                    rec.has_supp = True
+                    return True
         return rec.has_supp
 
     def _supp_from_tgz(self, rec: Record, tgz: Path, main_name: str | None) -> int:
