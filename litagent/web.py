@@ -26,10 +26,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import cli, presets
 from .customsites import (DEFAULT_FILE as SITES_DEFAULT, CustomSource, Site, SiteRegistry,
                           guess_mapping, name_error)
-from .http import PoliteClient
+from .http import Blocked, HttpError, PoliteClient
 from .llm import GIGACHAT_SCOPES
-from .models import parse_topic
+from .models import Record, parse_topic
 from .policy import Policy
+from .resolve import Downloader
 from .sources import DEFAULT_SOURCES, SOURCE_CLASSES, Ctx
 from .store import Library
 
@@ -96,9 +97,10 @@ COMMENTS = {
     "download_timeout": "сек на файл (простой сокета)",
     "download_retries": "попыток на файл (обычные запросы API: 5)",
     "pdf_only": "true: оставлять только статьи с реально скачанным PDF (как --pdf-only)",
+    "supplements": "true: докачивать доп. материалы статей (приложения, данные) в supp/<статья>/ (как --supplements)",
     "pubmed_pmc": "PubMed ищет ещё и в PMC и качает оттуда OA-PDF (false — выключить)",
     "custom_sites": "свои сайты (создаётся командой `sites add`)",
-    "max_downloads": "потолок успешных скачиваний за запуск (--max-downloads)",
+    "max_downloads": "потолок успешных скачиваний за запуск (--max-downloads; 0 — без потолка: качать все найденные)",
     "folders_by_source": "раскладывать файлы по папкам источников: pdf/<источник>/",
     "presets_file": "пресеты ручного режима (manual --save-preset / --preset)",
     "deepen_rounds": "при --count N: сколько раз углублять поиск, если N PDF ещё не набрано",
@@ -348,7 +350,8 @@ class JobManager:
 
 # ---------------------------------------------------------------- аргументы CLI из формы поиска
 FLAGS = {"oa_only": "--oa-only", "title_only": "--title-only", "strict": "--strict", "pdf_only": "--pdf-only",
-         "no_download": "--no-download", "no_pmc": "--no-pmc", "flat": "--flat", "dry_run": "--dry-run"}
+         "no_download": "--no-download", "no_pmc": "--no-pmc", "flat": "--flat", "dry_run": "--dry-run",
+         "supplements": "--supplements"}
 NUMS = {"year_from": "--year-from", "year_to": "--year-to", "limit": "--limit", "count": "--count",
         "max_downloads": "--max-downloads", "workers": "--workers", "deepen_rounds": "--deepen-rounds"}
 
@@ -384,6 +387,12 @@ def _common_argv(p: dict, known: list[str], forbidden: dict) -> list[str]:
             if key in ("limit", "workers", "max_downloads", "deepen_rounds") and n < 0:
                 raise ApiError(400, f"«{key}» не может быть отрицательным.")
             argv += [flag, str(n)]
+    if p.get("unlimited"):
+        if p.get("no_download"):
+            raise ApiError(400, "«Скачать всё» противоречит «только найти».")
+        if _int_opt(p, "max_downloads") is not None or _int_opt(p, "count") is not None:
+            raise ApiError(400, "«Скачать всё» не сочетается с «Макс. скачиваний» или «Скачать ровно N PDF».")
+        argv += ["--max-downloads", "0"]
     for key, flag in FLAGS.items():
         if p.get(key):
             argv.append(flag)
@@ -554,10 +563,13 @@ class WebApp:
     def get_library(self) -> dict:
         root = self.library_root()
         lib = Library(root)
+        if not (self.jobs.current and self.jobs.current.state == "running"):
+            lib.purge_parts()                              # недокачанные .part не должны висеть в интерфейсе
         records = []
         for pk, e in lib.records.items():
             f = e.get("file")
             records.append({**e, "pk": pk, "tags": lib.tags.get(pk, []),
+                            "supp": e.get("supp") or [],
                             "has_file": bool(f and (root / f).is_file())})
         records.sort(key=lambda r: (-(r.get("year") or 0), (r.get("title") or "").casefold()))
         return {"root": str(root), "stats": lib.stats(), "records": records, "all_tags": lib.all_tags()}
@@ -587,10 +599,84 @@ class WebApp:
         target = (root / rel).resolve()
         if not target.is_relative_to(root) or not target.is_file():
             raise ApiError(404, "Файл не найден в библиотеке.")
-        if target.suffix.lower() not in (".pdf", ".xml", ".tgz"):
+        if target.suffix.lower() == ".part":
+            raise ApiError(404, "Это временный недокачанный файл.")
+        is_supp = target.is_relative_to((root / "supp").resolve())
+        if not is_supp and target.suffix.lower() not in (".pdf", ".xml", ".tgz"):
             raise ApiError(403, "Отдаю только PDF/XML из библиотеки.")
-        ctype = "application/pdf" if target.suffix.lower() == ".pdf" else "application/xml"
+        ctype = "application/pdf" if target.suffix.lower() == ".pdf" else \
+                "application/xml" if target.suffix.lower() in (".xml", ".nxml") else \
+                "application/octet-stream"
         return ctype, target.read_bytes(), target.name
+
+    # --- дополнительные материалы
+    def _library_record(self, pk: str):
+        lib = Library(self.library_root())
+        e = lib.records.get(pk)
+        if e is None:
+            raise ApiError(404, f"Нет записи {pk} в библиотеке.")
+        return lib, Record.from_dict(e)
+
+    def post_supp_fetch(self, data: dict) -> dict:
+        """Автоматически докачать доп. материалы статьи (PMC-пакет и Europe PMC)."""
+        pk = data.get("pk")
+        if not isinstance(pk, str):
+            raise ApiError(400, "Ожидается {pk: строка}.")
+        lib, rec = self._library_record(pk)
+        if not rec.file:
+            raise ApiError(409, "У статьи ещё нет скачанного файла — доп. материалы искать негде.")
+        cfg = self.cfg()
+        pol = Policy()
+        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
+                              cache_dir=lib.cache_dir, retries=2,
+                              download_timeout=int(cfg.get("download_timeout", 25)),
+                              download_retries=int(cfg.get("download_retries", 2)))
+        ctx = Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None,
+                  pmc=bool(cfg.get("pubmed_pmc", True)))
+        try:
+            added = Downloader(ctx, lib, pol).fetch_supplements(rec)
+        except Exception as e:  # noqa: BLE001 — сетевая ошибка должна вернуться текстом, а не 500
+            raise ApiError(502, f"{type(e).__name__}: {str(e)[:200]}") from None
+        if added:
+            lib.register(rec)
+            lib.save()
+        return {"pk": pk, "added": added, "supp": lib.supp_list(pk)}
+
+    def post_supp_url(self, data: dict) -> dict:
+        """Вручную добавить файл доп. материалов по URL."""
+        pk, url = data.get("pk"), (data.get("url") or "").strip()
+        if not isinstance(pk, str) or not url:
+            raise ApiError(400, "Ожидается {pk: строка, url: строка}.")
+        lib, rec = self._library_record(pk)
+        cfg = self.cfg()
+        pol = Policy()
+        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
+                              cache_dir=None, retries=2,
+                              download_timeout=int(cfg.get("download_timeout", 25)),
+                              download_retries=int(cfg.get("download_retries", 2)))
+        ctx = Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None)
+        try:
+            entry = Downloader(ctx, lib, pol).fetch_supp_url(rec, url)
+        except HttpError as e:
+            raise ApiError(502, str(e)[:300]) from None
+        except Blocked as e:
+            raise ApiError(400, str(e)[:300]) from None
+        except Exception as e:  # noqa: BLE001
+            raise ApiError(502, f"{type(e).__name__}: {str(e)[:200]}") from None
+        lib.register(rec)
+        lib.save()
+        return {"pk": pk, "supp": entry, "all": lib.supp_list(pk)}
+
+    def post_supp_delete(self, data: dict) -> dict:
+        pk, rel = data.get("pk"), data.get("file")
+        if not isinstance(pk, str) or not isinstance(rel, str):
+            raise ApiError(400, "Ожидается {pk: строка, file: строка}.")
+        lib = Library(self.library_root())
+        try:
+            res = lib.delete_supp(pk, rel)
+        except KeyError as e:
+            raise ApiError(404, f"Нет записи/файла: {e}") from None
+        return {"pk": pk, "removed": res["removed"], "supp": lib.supp_list(pk)}
 
     # --- запуски
     def get_runs(self) -> dict:
@@ -891,6 +977,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, app.post_tags(data))
                 elif path == "/api/library/delete":
                     self._json(200, app.post_library_delete(data))
+                elif path == "/api/library/supplements/fetch":
+                    self._json(200, app.post_supp_fetch(data))
+                elif path == "/api/library/supplements/url":
+                    self._json(200, app.post_supp_url(data))
+                elif path == "/api/library/supplements/delete":
+                    self._json(200, app.post_supp_delete(data))
                 elif path == "/api/runs/delete":
                     self._json(200, app.post_runs_delete(data))
                 elif path == "/api/cache/clear":

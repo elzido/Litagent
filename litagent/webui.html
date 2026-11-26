@@ -227,6 +227,7 @@ details.adv summary:hover{color:var(--text)}
   padding:11px 16px;font-size:13.5px;box-shadow:0 8px 28px rgba(0,0,0,.4);animation:toastIn .25s var(--ease)}
 .toast.ok{border-left-color:var(--ok)}
 .toast.bad{border-left-color:var(--bad)}
+.toast.info{border-left-color:var(--info)}
 .toast.out{animation:toastOut .25s var(--ease) forwards}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 @keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
@@ -274,6 +275,22 @@ details.adv summary:hover{color:var(--text)}
   background:var(--bg2);border:1px solid rgba(226,176,74,.45);border-radius:12px;padding:10px 18px;z-index:40;
   box-shadow:0 8px 30px rgba(0,0,0,.45),0 0 22px rgba(226,176,74,.09);animation:pageIn .22s var(--ease)}
 .selbar .sc{font-size:13.5px;font-weight:600;white-space:nowrap}
+/* ---------- доп. материалы ---------- */
+.supps{display:flex;flex-direction:column;gap:6px;margin-top:9px}
+.supps .sh{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:8px}
+.supps .sh b{color:var(--teal);font-size:12px}
+.supp-item{display:flex;align-items:center;gap:8px;font-size:12.5px;background:var(--bg0);border:1px solid var(--line);
+  border-radius:8px;padding:5px 9px}
+.supp-item .sn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.supp-item a{color:var(--teal);font-weight:600;flex:none}
+.supp-item .sz{color:var(--dim);font-size:11px;flex:none}
+.supp-del{background:none;border:none;color:var(--dim);cursor:pointer;padding:2px 4px;border-radius:6px;line-height:0;
+  transition:all .15s var(--ease);flex:none}
+.supp-del:hover{color:var(--bad);background:var(--bad-bg)}
+.supp-tools{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px;align-items:center}
+.supp-url{flex:1;min-width:140px;padding:5px 10px;font-size:12.5px;border-radius:8px;background:var(--bg0);
+  border:1px solid var(--line2);color:var(--text)}
+.supp-url:focus{outline:none;border-color:rgba(127,212,193,.55);box-shadow:0 0 0 3px rgba(127,212,193,.12)}
 #lib-tags{margin-bottom:14px}
 #lib-tags .tchip{font-size:12px;padding:4px 12px}
 #lib-tags .tchip .cnt{opacity:.6;margin-left:5px;font-size:10.5px}
@@ -365,6 +382,8 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
             <button class="tchip" data-flag="pdf_only">только с PDF</button>
             <button class="tchip" data-flag="title_only">только названия</button>
             <button class="tchip" data-flag="strict">строго все группы</button>
+            <button class="tchip" data-flag="supplements" title="Скачать также доп. материалы (приложения, данные, медиа) в supp/">доп. материалы</button>
+            <button class="tchip" data-flag="unlimited" title="Скачать все найденные статьи без потолка (как --max-downloads 0)">скачать всё (без лимита)</button>
             <button class="tchip" data-flag="no_download">только найти</button>
             <button class="tchip" data-flag="no_pmc">без PMC</button>
             <button class="tchip" data-flag="flat">без папок источников</button>
@@ -412,6 +431,8 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
             <button class="tchip" data-flag="pdf_only">только с PDF</button>
             <button class="tchip" data-flag="title_only">только названия</button>
             <button class="tchip" data-flag="strict">строго все группы</button>
+            <button class="tchip" data-flag="supplements" title="Скачать также доп. материалы (приложения, данные, медиа) в supp/">доп. материалы</button>
+            <button class="tchip" data-flag="unlimited" title="Скачать все найденные статьи без потолка (как --max-downloads 0)">скачать всё (без лимита)</button>
             <button class="tchip" data-flag="no_download">только найти</button>
             <button class="tchip" data-flag="llm_filter">фильтр релевантности LLM</button>
             <button class="tchip" data-flag="no_llm">без LLM (эвристика)</button>
@@ -631,6 +652,8 @@ code.cli{display:block;background:var(--bg0);border:1px solid var(--line);border
           <div style="margin-top:12px">
             <div class="togglerow"><div><div class="tl">Только статьи с PDF</div><div class="td">pdf_only — как --pdf-only, проверка скачиванием</div></div>
               <label class="switch"><input type="checkbox" name="pdf_only"><span class="track"></span></label></div>
+            <div class="togglerow"><div><div class="tl">Доп. материалы статей</div><div class="td">supplements — качать приложения/данные в supp/ (PMC, Europe PMC)</div></div>
+              <label class="switch"><input type="checkbox" name="supplements"><span class="track"></span></label></div>
             <div class="togglerow"><div><div class="tl">PubMed ищет и в PMC</div><div class="td">pubmed_pmc — OA-PDF через официальный OA Web Service</div></div>
               <label class="switch"><input type="checkbox" name="pubmed_pmc"><span class="track"></span></label></div>
             <div class="togglerow"><div><div class="tl">Папки источников</div><div class="td">folders_by_source — pdf/&lt;источник&gt;/</div></div>
@@ -934,7 +957,9 @@ async function loadLibrary(){
   const st=libData.stats;
   $("#lib-stats").innerHTML=
     `<div class="stat"><b>${st.pdf}</b>PDF</div><div class="stat"><b>${st.xml}</b>XML</div>
-     <div class="stat"><b>${mb(st.articles_bytes)}</b>статьи</div><div class="stat"><b>${st.indexed}</b>в индексе</div>
+     <div class="stat"><b>${mb(st.articles_bytes)}</b>статьи</div>
+     ${st.supp?`<div class="stat"><b>${st.supp}</b>доп. файлов (${mb(st.supp_bytes)})</div>`:""}
+     <div class="stat"><b>${st.indexed}</b>в индексе</div>
      <div class="stat"><b>${st.runs}</b>запусков</div><div class="stat"><b>${mb(st.cache_bytes)}</b>HTTP-кэш</div>`;
   const srcs=[...new Set(libData.records.flatMap(r=>r.sources||[]))].sort();
   const sel=$("#lib-source"),cur=sel.value;
@@ -980,6 +1005,18 @@ function renderLibrary(){
     const tagAdd=tagInputPk===r.pk
       ?`<input class="tag-input" data-pk="${esc(r.pk)}" placeholder="тег…" maxlength="80">`
       :`<button type="button" class="tag-add-btn" data-tag-add data-pk="${esc(r.pk)}">+ тег</button>`;
+    const supps=(r.supp||[]).map(s=>
+      `<div class="supp-item"><span class="sn" title="${esc(s.name)}">${esc(s.name)}</span>
+        <span class="sz">${mb(s.size||0)}</span>
+        <a href="${fileHref(s.file)}" target="_blank" rel="noopener">открыть</a>
+        <button type="button" class="supp-del" data-supp-del data-pk="${esc(r.pk)}" data-file="${esc(s.file)}" title="удалить файл">×</button></div>`).join("");
+    const suppBlock=r.has_file&&r.file?
+      `<div class="supps">${(r.supp||[]).length?`<div class="sh">Доп. материалы <b>${(r.supp||[]).length}</b></div>`+supps:""}
+        <div class="supp-tools">
+          <button type="button" class="btn small" data-supp-fetch data-pk="${esc(r.pk)}" title="Найти и скачать доп. материалы автоматически (PMC, Europe PMC)">↓ докачать доп. материалы</button>
+          <input type="text" class="supp-url" data-supp-url-input data-pk="${esc(r.pk)}" placeholder="URL файла доп. материалов (вручную)">
+          <button type="button" class="btn small" data-supp-add data-pk="${esc(r.pk)}" title="Скачать файл по указанному URL">+ URL</button>
+        </div></div>`:"";
     return `<div class="card${sel?" selected":""}">
       <div style="display:flex;gap:10px;align-items:flex-start">
         <input type="checkbox" class="lib-check" data-pk="${esc(r.pk)}" ${sel?"checked":""} title="выбрать для удаления">
@@ -990,6 +1027,7 @@ function renderLibrary(){
       <div>${srcs}${r.is_oa?' <span class="st ok">OA</span>':""}${r.score!=null&&r.score!==""?` <span class="st info">оценка ${esc(Number(r.score).toFixed(0))}</span>`:""}</div>
       ${r.abstract?`<div class="ca">${esc(r.abstract)}</div>`:""}
       <div class="tagrow">${tags}${tagAdd}</div>
+      ${suppBlock}
       <div class="actions">${r.has_file&&r.file?`<a class="btn small primary" href="${fileHref(r.file)}" target="_blank" rel="noopener">${r.file.endsWith(".xml")?"XML":"PDF"}</a>`:'<span class="st mute">файл не скачан</span>'}
       ${links.join(" ")}</div></div>`;
   }).join("");
@@ -1036,14 +1074,53 @@ $("#lib-sel-all").addEventListener("change",e=>{
 });
 $("#lib-del-sel").onclick=()=>doDelete([...libSel]);
 $("#lib-sel-clear").onclick=()=>{libSel.clear();renderLibrary();};
-$("#lib-list").addEventListener("click",e=>{
+$("#lib-list").addEventListener("click",async e=>{
   const rm=e.target.closest("[data-tag-remove]");
   if(rm){const r=libData.records.find(x=>x.pk===rm.dataset.pk);if(r)saveTags(r.pk,(r.tags||[]).filter(t=>t!==rm.dataset.tag));return;}
   const add=e.target.closest("[data-tag-add]");
   if(add){tagInputPk=add.dataset.pk;renderLibrary();const inp=$("#lib-list .tag-input");if(inp)inp.focus();return;}
+  const sf=e.target.closest("[data-supp-fetch]");
+  if(sf){await suppFetch(sf.dataset.pk,sf);return;}
+  const sa=e.target.closest("[data-supp-add]");
+  if(sa){
+    const pk=sa.dataset.pk;
+    const inp=[...document.querySelectorAll("#lib-list [data-supp-url-input]")].find(x=>x.dataset.pk===pk);
+    await suppAddUrl(pk,inp?inp.value.trim():"",sa);return;
+  }
+  const sd=e.target.closest("[data-supp-del]");
+  if(sd){await suppDelete(sd.dataset.pk,sd.dataset.file);return;}
   const del=e.target.closest("[data-del-article]");
   if(del)doDelete([del.dataset.pk]);
 });
+async function suppFetch(pk,btn){
+  if(btn){btn.disabled=true;btn.textContent="качаю…";}
+  try{
+    const r=await api("/api/library/supplements/fetch",{method:"POST",body:JSON.stringify({pk})});
+    const rec=libData.records.find(x=>x.pk===pk);if(rec)rec.supp=r.supp;
+    toast(r.added?`Доп. материалы: добавлено файлов: ${r.added}`:"Новых доп. материалов не нашлось (нужен PMCID или OA-пакет PMC/Europe PMC).",r.added?"ok":"info");
+    renderLibrary();
+  }catch(err){toast(err.message,"bad");if(btn){btn.disabled=false;btn.textContent="↓ докачать доп. материалы";}}
+}
+async function suppAddUrl(pk,url,btn){
+  if(!url){toast("Вставьте URL файла доп. материалов.","bad");return;}
+  if(!/^https?:\/\//i.test(url)){toast("URL должен начинаться с http:// или https://","bad");return;}
+  if(btn){btn.disabled=true;}
+  try{
+    const r=await api("/api/library/supplements/url",{method:"POST",body:JSON.stringify({pk,url})});
+    const rec=libData.records.find(x=>x.pk===pk);if(rec)rec.supp=r.all;
+    toast(`Добавлен файл: ${r.supp.name}`,"ok");
+    renderLibrary();
+  }catch(err){toast(err.message,"bad");if(btn)btn.disabled=false;}
+}
+async function suppDelete(pk,file){
+  if(!await confirmBox("Удалить доп. материал?","Файл будет удалён с диска. Это необратимо."))return;
+  try{
+    const r=await api("/api/library/supplements/delete",{method:"POST",body:JSON.stringify({pk,file})});
+    const rec=libData.records.find(x=>x.pk===pk);if(rec)rec.supp=r.supp;
+    toast("Доп. материал удалён.","ok");
+    renderLibrary();
+  }catch(err){toast(err.message,"bad");}
+}
 $("#lib-list").addEventListener("change",e=>{
   const chk=e.target.closest(".lib-check");
   if(chk){chk.checked?libSel.add(chk.dataset.pk):libSel.delete(chk.dataset.pk);renderLibrary();}
@@ -1320,7 +1397,7 @@ async function loadConfig(){
   $("#cfg-sources-err").style.display="none";
   const c=d.cfg;
   for(const k of ["email","out","custom_sites","presets_file","limit_per_source","max_downloads","download_workers",
-    "download_timeout","download_retries","cache_ttl","deepen_rounds","deepen_limit_cap","pdf_only","pubmed_pmc","folders_by_source"])cfgSet(k,c[k]);
+    "download_timeout","download_retries","cache_ttl","deepen_rounds","deepen_limit_cap","pdf_only","pubmed_pmc","folders_by_source","supplements"])cfgSet(k,c[k]);
   for(const sec of ["keys","llm","auto","web"])for(const k of Object.keys(c[sec]||{}))cfgSet(`${sec}.${k}`,c[sec][k]);
   sourceChips("#cfg-sources",c.sources||[]);
   $$("#cfg-form .env-badge").forEach(b=>b.remove());

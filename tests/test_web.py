@@ -147,6 +147,20 @@ class TestArgv(Tmp):
         with self.assertRaises(ApiError):
             self.build({"mode": "manual", "topics": ["x"], "sources": ["nosuch"]})
 
+    def test_unlimited_and_supplements(self):
+        argv, _, _ = self.build({"mode": "manual", "topics": ["x"], "unlimited": True, "supplements": True})
+        self.assertEqual(argv[argv.index("--max-downloads") + 1], "0")
+        self.assertIn("--supplements", argv)
+        argv, _, _ = self.build({"mode": "auto", "goal": "x", "unlimited": True})
+        self.assertEqual(argv[argv.index("--max-downloads") + 1], "0")
+
+    def test_unlimited_conflicts(self):
+        for bad in ({"mode": "manual", "topics": ["x"], "unlimited": True, "no_download": True},
+                    {"mode": "manual", "topics": ["x"], "unlimited": True, "max_downloads": 10},
+                    {"mode": "manual", "topics": ["x"], "unlimited": True, "count": 5}):
+            with self.assertRaises(ApiError):
+                self.build(bad)
+
 
 class TestConfigApi(Tmp):
     def test_create_and_read(self):
@@ -426,6 +440,82 @@ class TestSiteForm(Tmp):
         with self.assertRaises(ApiError) as cm:                            # невалидное описание — список ошибок
             self.app.post_site_test({**SITE_DATA, "fields": {}})
         self.assertTrue(any("fields.title" in e for e in json.loads(cm.exception.message)))
+
+
+class TestSupplementsApi(Tmp):
+    """Веб-API доп. материалов: выдача списка, удаление файла, ручная докачка, ошибка без файла."""
+
+    def write_supp(self):
+        lib = self.write_index()
+        sdir = lib / "supp" / "pubmed" / "Smith_2022_Test_1a2b3c4d"
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / "extra.xlsx").write_bytes(b"PK\x03\x04" + b"z" * 1000)
+        (lib / "index.json").write_text(json.dumps({
+            "records": {"doi:10.1/x": {"title": "CRISPR therapy", "authors": ["Smith J"], "year": 2022, "doi": "10.1/x",
+                                       "sources": ["pubmed"], "file": "pdf/pubmed/Smith_2022_Test_1a2b3c4d.pdf",
+                                       "supp": [{"file": "supp/pubmed/Smith_2022_Test_1a2b3c4d/extra.xlsx",
+                                                 "name": "extra.xlsx", "size": 1004, "origin": "pmc-package",
+                                                 "added": "2026-11-22T12:00:00"}],
+                                       "status": "pdf"}},
+            "aliases": {"doi:10.1/x": "doi:10.1/x"}}), encoding="utf-8")
+        return lib
+
+    def test_library_returns_supp(self):
+        self.write_supp()
+        d = self.app.get_library()
+        self.assertEqual(d["stats"]["supp"], 1)
+        rec = d["records"][0]
+        self.assertEqual([s["name"] for s in rec["supp"]], ["extra.xlsx"])
+
+    def test_get_file_serves_supp(self):
+        self.write_supp()
+        ctype, data, name = self.app.get_file("supp/pubmed/Smith_2022_Test_1a2b3c4d/extra.xlsx")
+        self.assertEqual((ctype, name), ("application/octet-stream", "extra.xlsx"))
+        self.assertTrue(data.startswith(b"PK\x03\x04"))
+
+    def test_get_file_refuses_part(self):
+        lib = self.write_index()
+        part = lib / "pdf" / "pubmed" / "Smith_2022_Test_1a2b3c4d.pdf.part"
+        part.write_bytes(b"x" * 100)
+        with self.assertRaises(ApiError) as cm:
+            self.app.get_file("pdf/pubmed/Smith_2022_Test_1a2b3c4d.pdf.part")
+        self.assertEqual(cm.exception.code, 404)
+
+    def test_get_library_purges_parts(self):
+        lib = self.write_index()
+        part = lib / "pdf" / "pubmed" / "Smith_2022_Test_deadbeef.pdf.part"
+        part.write_bytes(b"x" * 100)
+        d = self.app.get_library()
+        self.assertFalse(part.exists())
+        self.assertEqual(d["stats"]["pdf"], 1)                            # .part не попал в счётчик
+
+    def test_supp_delete(self):
+        lib = self.write_supp()
+        r = self.app.post_supp_delete({"pk": "doi:10.1/x", "file": "supp/pubmed/Smith_2022_Test_1a2b3c4d/extra.xlsx"})
+        self.assertTrue(r["removed"])
+        self.assertEqual(r["supp"], [])
+        self.assertFalse((lib / "supp" / "pubmed" / "Smith_2022_Test_1a2b3c4d" / "extra.xlsx").exists())
+
+    def test_supp_errors(self):
+        self.write_index()
+        (self.cwd / "library" / "index.json").write_text(json.dumps({
+            "records": {"doi:10.1/nofile": {"title": "No file yet article", "authors": [], "year": 2020,
+                                            "doi": "10.1/nofile", "sources": ["pubmed"], "file": None, "supp": []}},
+            "aliases": {"doi:10.1/nofile": "doi:10.1/nofile"}}), encoding="utf-8")
+        with self.assertRaises(ApiError) as cm:
+            self.app.post_supp_delete({"pk": "doi:нет/такой", "file": "x"})
+        self.assertEqual(cm.exception.code, 404)
+        with self.assertRaises(ApiError) as cm:                           # запись без скачанного файла
+            self.app.post_supp_fetch({"pk": "doi:10.1/nofile"})
+        self.assertEqual(cm.exception.code, 409)
+
+    def test_supp_fetch_and_url_endpoints_wired(self):
+        from litagent.resolve import Downloader
+        self.write_supp()
+        with mock.patch.object(Downloader, "fetch_supplements", return_value=2) as m:
+            r = self.app.post_supp_fetch({"pk": "doi:10.1/x"})
+        m.assert_called_once()
+        self.assertEqual(r["added"], 2)
 
 
 class TestJobs(unittest.TestCase):

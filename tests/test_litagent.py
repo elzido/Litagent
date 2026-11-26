@@ -238,7 +238,7 @@ class TestInterrupt(Base):
         recs = [Record(title=f"Interrupt paper {i} long enough title", arxiv_id=f"2301.{i:05d}", sources=["arxiv"])
                 for i in range(1, 4)]
 
-        def fake_fetch(rec, pdf_only=False):
+        def fake_fetch(rec, pdf_only=False, supplements=False):
             dest = a.lib.path_for(rec, ".pdf")
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(PDF)
@@ -1149,7 +1149,7 @@ def pmc_router(url):
         pid = q["id"]
         if pid == "PMC222":
             return 200, {}, oa_xml(pid)
-        if pid in ("PMC333", "PMC555"):
+        if pid in ("PMC333", "PMC555", "PMC660", "PMC661"):
             return 200, {}, oa_xml(pid, pdf=False)
         return 200, {}, f'<OA><error code="idIsNotOpenAccess">{pid} is not Open Access</error></OA>'.encode()
     if "oa_pdf/aa/bb/x.PMC222.pdf" in url:
@@ -1159,6 +1159,16 @@ def pmc_router(url):
                                   "PMC333/main-article.pdf": MAIN_PDF, "PMC333/PMC333.nxml": b"<x/>"})
     if "oa_package/aa/bb/PMC555.tar.gz" in url:
         return 200, {}, make_tgz({"PMC555/supp-data.pdf": SUPP_PDF})
+    if "oa_package/aa/bb/PMC660.tar.gz" in url:
+        return 200, {}, make_tgz({"PMC660/main-article.pdf": MAIN_PDF, "PMC660/media-1.pdf": SUPP_PDF,
+                                  "PMC660/PMC660.nxml": b"<x/>", "PMC660/../../supp-evil.pdf": SUPP_PDF,
+                                  "PMC660/extra-table.xlsx": b"PK\x03\x04" + b"z" * 1500})
+    if "oa_package/aa/bb/PMC661.tar.gz" in url:
+        return 200, {}, make_tgz({"PMC661/main-article.pdf": MAIN_PDF, "PMC661/sup-table.xlsx": b"PK\x03\x04" + b"q" * 1500})
+    if "/supplementaryFiles" in url:
+        return 404, {}, b""                                              # у fixture-статей zip-приложений нет
+    if url in REMOTE_FILES:
+        return 200, {}, REMOTE_FILES[url]
     return 404, {}, b""
 
 
@@ -1264,6 +1274,213 @@ class TestPmcDownload(PmcBase):
             bad.write_bytes(b"not a tarball")
             self.assertFalse(extract_main_pdf(bad, out))
             self.assertFalse(out.exists())
+
+
+class TestPartFiles(unittest.TestCase):
+    """.part — временные файлы: не статьи, удаляются автоматически."""
+
+    def lib(self, root):
+        from litagent.store import Library
+        lib = Library(root)
+        (root / "pdf" / "arxiv").mkdir(parents=True, exist_ok=True)
+        (root / "pdf" / "arxiv" / "A_2020_Paper_deadbeef.pdf").write_bytes(b"%PDF" + b"1" * 2000)
+        (root / "pdf" / "arxiv" / "B_2020_Paper_c0ffee00.pdf.part").write_bytes(b"half")
+        (root / "pdf" / "arxiv" / "B_2020_Paper_c0ffee00.pdf.tgz.part").write_bytes(b"half")
+        (root / "xml" / "C_2020_Paper_baddad00.xml.part").write_bytes(b"half")
+        lib.register(Record(title="A" * 30, doi="10.1/a", file="pdf/arxiv/A_2020_Paper_deadbeef.pdf"))
+        lib.save()
+        return lib
+
+    def test_parts_not_counted_as_articles(self):
+        from litagent.store import Library
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            self.lib(root)
+            st = Library(root).stats()
+            self.assertEqual((st["pdf"], st["xml"]), (1, 0))               # .part не считается статьёй
+            self.assertTrue(any(p.suffix == ".part" for p in (root / "pdf").rglob("*")))
+
+    def test_purge_parts_removes_them(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            lib = self.lib(root)
+            res = lib.purge_parts()
+            self.assertEqual(res["files"], 3)
+            self.assertEqual(list(root.rglob("*.part")), [])
+            self.assertTrue((root / "pdf" / "arxiv" / "A_2020_Paper_deadbeef.pdf").exists())   # статья цела
+
+    def test_agent_purges_stale_parts_on_start_and_finish(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            self.lib(root)
+            (root / "pdf" / "arxiv" / "X_2020_Old_deadbeef.pdf.part").write_bytes(b"stale")
+            from litagent.store import Library
+            lib = Library(root)
+            self.assertTrue((root / "pdf" / "arxiv" / "X_2020_Old_deadbeef.pdf.part").exists())
+            lib.purge_parts()
+            self.assertFalse((root / "pdf" / "arxiv" / "X_2020_Old_deadbeef.pdf.part").exists())
+
+    def test_clean_reports_parts_separately(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            self.lib(root)
+            with mock.patch.object(cli, "log", lambda m="": None):
+                rc = cli.main(["clean", "--out", str(root), "--yes", "--articles"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(list(root.rglob("*.part")), [])
+            self.assertEqual(list((root / "pdf").rglob("*.pdf")), [])
+            idx = json.loads((root / "index.json").read_text(encoding="utf-8"))
+            self.assertEqual(idx["records"], {})
+
+    def test_by_source_counts_ignore_parts(self):
+        from litagent.store import Library
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d, "lib")
+            self.lib(root)
+            self.assertEqual(Library(root).by_source_counts(), {"arxiv": 1})
+
+
+class TestUnlimitedDownload(PmcBase):
+    """max_downloads=0 — «бесконечное» скачивание: качает всех кандидатов, углубляя поиск до исчерпания."""
+
+    @staticmethod
+    def rec(tag, ok=True):
+        return Record(title=f"{'good' if ok else 'bad'} unlimited paper {tag}", doi=f"10.1/{tag}", is_oa=True)
+
+    def fake(self, a):
+        def fake_download(recs, n, oa_only=False, pdf_only=False, supplements=False):
+            c = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0, "supp": 0}
+            for r in recs:
+                if n > 0 and c["pdf"] >= n:
+                    break
+                r.status = "pdf" if r.title.startswith("good") else "no_pdf"
+                c["pdf" if r.status == "pdf" else "no_pdf"] += 1
+            return c
+        a.download = fake_download
+
+    def test_zero_means_no_cap_real_downloads(self):
+        a = self.agent()
+        url = "https://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/aa/bb/x.PMC222.pdf"
+        recs = [Record(title=f"Unlimited real paper {i} with long title", doi=f"10.1/real{i}",
+                       pdf_urls=[url], is_oa=True) for i in range(5)]
+        c = a.download(recs, 0)
+        self.assertEqual(c["pdf"], 5)                                     # без потолка обработаны все кандидаты
+
+    def test_until_zero_deepens_until_exhausted(self):
+        a = self.agent()
+        self.fake(a)
+        calls = []
+
+        def more(rnd):
+            calls.append(rnd)
+            return [self.rec(f"r{rnd}-{i}") for i in range(2)] if rnd <= 2 else []
+        counts, offered = a.download_until([self.rec("a"), self.rec("b", ok=False)], 0, True, False, more, 5)
+        self.assertEqual(calls, [1, 2, 3])                                # третий вернул пусто — остановка
+        self.assertEqual(counts["pdf"], 5)                                # a + 2 + 2, без всякого потолка
+        self.assertEqual(len(offered), 6)
+
+    def test_negative_max_downloads_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(cli, "log", lambda m="": None):
+                with self.assertRaises(SystemExit) as cm:
+                    cli.main(["manual", "-q", "x", "--out", d, "--max-downloads", "-1", "--dry-run"])
+            self.assertIn("не может быть отрицательным", str(cm.exception))
+
+
+class TestSupplements(PmcBase):
+    """Доп. материалы: извлечение из PMC-пакета, ручная докачка по URL, учёт в индексе и при удалении."""
+
+    def rec660(self):
+        return Record(title="Package paper PMC660 with supplementary files here", pmcid="PMC660", is_oa=True)
+
+    def test_tgz_extracts_supplements_except_main_pdf(self):
+        a = self.agent()
+        r = self.rec660()
+        self.assertEqual(a.downloader.fetch(r, supplements=True), "pdf")
+        self.assertEqual((a.lib.root / r.file).read_bytes(), MAIN_PDF)    # основной PDF — как и раньше, в pdf/
+        names = {s["name"] for s in r.supp}
+        self.assertEqual(names, {"media-1.pdf", "supp-evil.pdf", "extra-table.xlsx"})
+        self.assertTrue(all(s["file"].startswith("supp/") for s in r.supp))
+        self.assertTrue(all((a.lib.root / s["file"]).is_file() for s in r.supp))
+        supp_dir = a.lib.supp_dir_for(r.file)
+        self.assertEqual([p for p in Path(self.tmp.name).rglob("*evil*") if not p.is_relative_to(supp_dir)], [])
+
+    def test_no_supplements_without_flag(self):
+        a = self.agent()
+        r = self.rec660()
+        self.assertEqual(a.downloader.fetch(r), "pdf")
+        self.assertEqual(r.supp, [])
+        self.assertFalse((a.lib.root / "supp").exists())
+
+    def test_fetch_supplements_for_already_downloaded(self):
+        a = self.agent()
+        r = Record(title="Package paper PMC661 fetched first without supp", pmcid="PMC661", is_oa=True)
+        self.assertEqual(a.downloader.fetch(r), "pdf")
+        self.assertEqual(r.supp, [])
+        added = a.downloader.fetch_supplements(r)
+        self.assertEqual(added, 1)                                        # sup-table.xlsx; main-article исключён
+        self.assertEqual([s["name"] for s in r.supp], ["sup-table.xlsx"])
+        self.assertEqual(list((a.lib.root / "supp").rglob("*.part")), [])
+
+    def test_manual_url_download_and_delete(self):
+        REMOTE_FILES["https://files.example.org/appendix.pdf"] = b"%PDF-1.4\n" + b"a" * 2000
+        a = self.agent()
+        r = self.rec660()
+        a.downloader.fetch(r)
+        entry = a.downloader.fetch_supp_url(r, "https://files.example.org/appendix.pdf")
+        self.assertEqual(entry["name"], "appendix.pdf")
+        self.assertTrue((a.lib.root / entry["file"]).is_file())
+        a.lib.register(r)
+        a.lib.save()
+        res = a.lib.delete_supp(r.primary_key(), entry["file"])
+        self.assertTrue(res["removed"])
+        self.assertFalse((a.lib.root / entry["file"]).exists())
+        self.assertEqual(a.lib.supp_list(r.primary_key()), [])
+
+    def test_forbidden_url_rejected(self):
+        a = self.agent()
+        r = self.rec660()
+        a.downloader.fetch(r)
+        with self.assertRaises(HttpError):
+            a.downloader.fetch_supp_url(r, "https://sci-hub.se/x.pdf")
+        self.assertEqual(r.supp, [])
+
+    def test_supp_names_are_flattened(self):
+        from litagent.resolve import extract_supp_from_tgz
+        with tempfile.TemporaryDirectory() as d:
+            tgz = Path(d, "p.tgz")
+            tgz.write_bytes(make_tgz({"PMC1/../evil.pdf": b"x" * 3000, "PMC1/sup-data.csv": b"a,b\n1,2\n"}))
+            out = Path(d, "supp")
+            items = extract_supp_from_tgz(tgz, out)
+            self.assertEqual({i["name"] for i in items}, {"evil.pdf", "sup-data.csv"})   # без путей и обходов
+            self.assertFalse([p for p in out.iterdir() if p.is_dir()])
+            self.assertFalse(Path(d, "evil.pdf").exists())
+
+    def test_delete_article_removes_its_supplements(self):
+        REMOTE_FILES["https://files.example.org/suppfile.dat"] = b"data " * 1000
+        a = self.agent()
+        r = self.rec660()
+        a.downloader.fetch(r, supplements=True)
+        e = a.downloader.fetch_supp_url(r, "https://files.example.org/suppfile.dat")
+        a.lib.register(r)
+        a.lib.save()
+        supp_dir = a.lib.supp_dir_for(r.file)
+        self.assertTrue(supp_dir.is_dir() and (a.lib.root / e["file"]).is_file())
+        res = a.lib.delete([r.primary_key()])
+        self.assertEqual(res["deleted"], 1)
+        self.assertFalse(supp_dir.exists())
+        self.assertEqual(list(a.lib.root.rglob("suppfile.dat")), [])
+
+    def test_stats_count_supplements(self):
+        from litagent.store import Library
+        REMOTE_FILES["https://files.example.org/stat.dat"] = b"x" * 5000
+        a = self.agent()
+        r = self.rec660()
+        a.downloader.fetch(r, supplements=True)
+        a.downloader.fetch_supp_url(r, "https://files.example.org/stat.dat")
+        st = Library(Path(self.tmp.name, "lib")).stats()
+        self.assertGreaterEqual(st["supp"], 4)
+        self.assertGreaterEqual(st["supp_bytes"], 5000)
 
 
 class TestSingleSite(CustomBase):
@@ -1626,10 +1843,10 @@ class TestDownloadUntil(CustomBase):
         return Record(title=f"{'good' if ok else 'bad'} paper {doi}", doi=f"10.1/{doi}", is_oa=True)
 
     def fake(self, a):
-        def fake_download(recs, n, oa_only=False, pdf_only=False):
-            c = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0}
+        def fake_download(recs, n, oa_only=False, pdf_only=False, supplements=False):
+            c = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0, "supp": 0}
             for r in recs:
-                if c["pdf"] >= n:
+                if n > 0 and c["pdf"] >= n:
                     break
                 r.status = "pdf" if r.title.startswith("good") else "no_pdf"
                 c["pdf" if r.status == "pdf" else "no_pdf"] += 1

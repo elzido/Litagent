@@ -28,6 +28,7 @@ from .wizard import interview
 DEFAULT_CFG = {
     "email": "", "tool": "litagent", "out": "library", "sources": DEFAULT_SOURCES,
     "limit_per_source": 50, "max_downloads": 20, "cache_ttl": 86400, "custom_sites": DEFAULT_FILE, "pubmed_pmc": True, "pdf_only": False,
+    "supplements": False,
     "deepen_rounds": 5, "deepen_limit_cap": 1000, "folders_by_source": True, "presets_file": presets.DEFAULT_FILE,
     "download_workers": 10, "download_timeout": 25, "download_retries": 2,
     "keys": {"ncbi": "", "openalex": "", "s2": "", "core": "", "gigachat": "",
@@ -92,7 +93,9 @@ def add_common(p: argparse.ArgumentParser) -> None:
                                               "Паузы и одно соединение на хост сохраняются")
     p.add_argument("--pdf-only", action="store_true", help="оставить только статьи с реально доступным полным PDF "
                                                            "(включает --oa-only; проверка = скачивание, XML не берётся)")
-    p.add_argument("--max-downloads", type=int, help="максимум успешных скачиваний за запуск")
+    p.add_argument("--max-downloads", type=int, help="максимум успешных скачиваний за запуск (0 — без потолка: качать все найденные)")
+    p.add_argument("--supplements", action="store_true", help="докачивать дополнительные материалы статей "
+                                                               "(приложения, данные, медиа) в supp/<статья>/ (PMC, Europe PMC)")
     p.add_argument("-n", "--count", type=int, metavar="N", help="скачать ровно N статей с PDF: поиск углубляется, пока не наберётся N "
                                                                "(включает --pdf-only и --max-downloads N)")
     p.add_argument("--deepen-rounds", type=int, metavar="K", help="сколько раз при --count можно углублять поиск (по умолчанию 5)")
@@ -158,7 +161,11 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["sources"] = list(cfg["sources"]) + [n for n in reg.enabled_names()
                                                  if n not in cfg["sources"] and n not in SOURCE_CLASSES]
     if getattr(a, "max_downloads", None) is not None:
+        if a.max_downloads < 0:
+            raise SystemExit("--max-downloads не может быть отрицательным (0 — без потолка).")
         cfg["max_downloads"] = a.max_downloads
+    if getattr(a, "supplements", False):
+        cfg["supplements"] = True
     if getattr(a, "count", None) is not None:
         cfg["max_downloads"] = a.count
     if getattr(a, "deepen_rounds", None) is not None:
@@ -190,21 +197,30 @@ def finish_and_report(agent: Agent, mode: str, specs, records, args, cfg, extra=
     table(records)
     extra = dict(extra or {})
     pdf_only = getattr(args, "pdf_only", False)
+    supplements = bool(cfg.get("supplements"))
+    unlimited = int(cfg["max_downloads"]) <= 0
     if records and not args.no_download:
-        log(f"\nСкачивание (до {cfg['max_downloads']} " + ("статей с полным PDF" if pdf_only else "файлов")
-            + ", только легальные OA-копии):")
+        log(f"\nСкачивание (" + ("без потолка — все найденные " if unlimited else f"до {cfg['max_downloads']} ")
+            + ("статей с полным PDF" if pdf_only else "файлов")
+            + (", с доп. материалами" if supplements else "") + ", только легальные OA-копии):")
         t0, st0 = time.monotonic(), dict(agent.client.stats)
-        if getattr(args, "count", None) is not None:       # докачка: углублять поиск, пока не наберётся N PDF
-            counts, records = agent.download_until(records, cfg["max_downloads"], args.oa_only, True, more,
-                                                   int(cfg.get("deepen_rounds", 5)))
-            extra["target"] = {"requested": args.count, "reached": counts["pdf"] + counts["exists"], "candidates": len(records)}
-            if extra["target"]["reached"] < args.count:
-                log(f"⚠ Набрано {extra['target']['reached']} из {args.count} PDF: доступные источники исчерпаны или достигнут "
-                    f"предел --deepen-rounds. Добавьте источники (--sources), расширьте тему/годы или увеличьте --deepen-rounds.")
+        if getattr(args, "count", None) is not None or unlimited:   # докачка: углублять поиск, пока не наберётся N PDF (0 — пока не кончатся)
+            counts, records = agent.download_until(records, cfg["max_downloads"], args.oa_only,
+                                                   True if getattr(args, "count", None) is not None else pdf_only,
+                                                   more, int(cfg.get("deepen_rounds", 5)), supplements)
+            if getattr(args, "count", None) is not None:
+                extra["target"] = {"requested": args.count, "reached": counts["pdf"] + counts["exists"], "candidates": len(records)}
+                if extra["target"]["reached"] < args.count:
+                    log(f"⚠ Набрано {extra['target']['reached']} из {args.count} PDF: доступные источники исчерпаны или достигнут "
+                        f"предел --deepen-rounds. Добавьте источники (--sources), расширьте тему/годы или увеличьте --deepen-rounds.")
+            else:
+                extra["unlimited"] = {"downloaded": counts["pdf"] + counts["exists"], "candidates": len(records)}
         else:
-            counts = agent.download(records, cfg["max_downloads"], args.oa_only, pdf_only)
+            counts = agent.download(records, cfg["max_downloads"], args.oa_only, pdf_only, supplements)
         st1 = agent.client.stats
         log(f"\nИтог скачивания: {counts}")
+        if counts.get("supp"):
+            log(f"Доп. материалы: {counts['supp']} файлов в supp/")
         log(f"Скачивание заняло {time.monotonic() - t0:.0f} с (потоков: {agent.workers}; запросов: "
             f"{st1['requests'] - st0['requests']}, повторов: {st1['retries'] - st0['retries']})")
         if agent.lib.by_source:
@@ -373,7 +389,7 @@ def cmd_auto(a) -> int:
         records = llm_filter(llm, goal, records, float(thr), log=log)
         log(f"  оставлено {len(records)} из {before}")
     more = None
-    if getattr(a, "count", None) is not None:
+    if getattr(a, "count", None) is not None or int(cfg["max_downloads"]) <= 0:
         last = plan_log[-1]["round"] if plan_log else None            # углубляем то, что реально сработало в последнем раунде
         used = list(dict.fromkeys(e["source"] for e in agent.runlog
                                   if e.get("round") == last and "error" not in e and "skipped" not in e)) or names
@@ -715,7 +731,10 @@ def cmd_clean(a) -> int:
             log("Отменено.")
             return 0
     res = lib.clean(runs=runs, cache=cache, articles=articles)
-    log(f"Удалено: {res['pdf']} PDF, {res['xml']} XML" + (f", {res['runs']} логов (запусков)" if runs else "")
+    log(f"Удалено: {res['pdf']} PDF, {res['xml']} XML"
+        + (f", {res['supp']} папок доп. материалов" if res.get("supp") else "")
+        + (f", {res['parts']} временных файлов (.part)" if res.get("parts") else "")
+        + (f", {res['runs']} логов (запусков)" if runs else "")
         + (f", {res['cache']} файлов кэша" if cache else "") + f" ({_mb(res['bytes'])}). Индекс обновлён.")
     for e in res["errors"][:5]:
         log(f"  не удалось: {e}")

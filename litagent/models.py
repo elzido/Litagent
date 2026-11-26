@@ -78,6 +78,7 @@ class Record:
     sources: list = field(default_factory=list)
     score: float | None = None
     file: str | None = None
+    supp: list = field(default_factory=list)   # доп. материалы: [{file, name, size, origin, added}]
     status: str = ""
 
     def __post_init__(self):

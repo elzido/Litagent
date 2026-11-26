@@ -24,6 +24,7 @@ class Agent:
         if keys.get("ncbi"):
             self.policy.intervals["eutils.ncbi.nlm.nih.gov"] = 0.11     # 10 запр./с с ключом
         self.lib = Library(cfg.get("out", "library"), by_source=bool(cfg.get("folders_by_source", True)))
+        self.lib.purge_parts()                          # обрывки .part от прошлых прерванных запусков — не статьи
         ua = f"{cfg.get('tool', 'litagent')}/1.0 (mailto:{cfg.get('email') or 'unknown'})"
         self.client = PoliteClient(self.policy, ua, cache_dir=self.lib.cache_dir,
                                    cache_ttl=int(cfg.get("cache_ttl", 86400)), log=log,
@@ -145,15 +146,19 @@ class Agent:
                                               -len(r.sources), -(r.cited_by or 0)))
 
     # ------------------------------------------------------------ скачивание
-    def download(self, records: list[Record], max_downloads: int, oa_only: bool = False, pdf_only: bool = False) -> dict:
+    def download(self, records: list[Record], max_downloads: int, oa_only: bool = False, pdf_only: bool = False,
+                 supplements: bool = False) -> dict:
         """pdf_only: цель — max_downloads статей с ДЕЙСТВИТЕЛЬНО скачанным PDF. Записи без PDF получают status 'no_pdf'
-        (или 'failed…'), XML не берётся. Сначала проверяются записи, у которых PDF вероятен (ссылка из источника, PMCID, is_oa)."""
-        counts = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0}
+        (или 'failed…'), XML не берётся. Сначала проверяются записи, у которых PDF вероятен (ссылка из источника, PMCID, is_oa).
+        max_downloads <= 0: без потолка — качаем всех кандидатов.
+        supplements: вместе со статьёй доставать доп. материалы (PMC/Europe PMC)."""
+        counts = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0, "supp": 0}
+        unlimited = max_downloads <= 0
         oa_only = oa_only or pdf_only
         if pdf_only:                                      # стабильно: внутри групп порядок по релевантности сохраняется
             likely = lambda r: 0 if (r.pdf_urls or r.pmcid or r.is_oa) else 1          # noqa: E731
             records = sorted(records, key=likely)
-        cap = max_downloads * (10 if pdf_only else 4)     # без PDF отсеивается много — попыток нужно больше
+        cap = len(records) if unlimited else max_downloads * (10 if pdf_only else 4)  # без PDF отсеивается много — попыток нужно больше
         queue = iter(records)
         got = attempts = done_n = 0
         pending: dict = {}
@@ -182,6 +187,7 @@ class Agent:
                 got += 1
                 self.lib.register(r)
                 self.lib.save()                       # индекс на диске после каждого успеха: прерывание ничего не теряет
+                counts["supp"] += len(r.supp or [])
             done_n += 1
             self.log(f"  [{done_n}] {st[:60]:<12} {r.short()}")
 
@@ -189,12 +195,12 @@ class Agent:
             with ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="dl") as ex:
                 def fill():
                     nonlocal attempts
-                    while len(pending) < self.workers and got + len(pending) < max_downloads and attempts < cap:
+                    while len(pending) < self.workers and attempts < cap and (unlimited or got + len(pending) < max_downloads):
                         r = next_record()
                         if r is None:
                             return
                         attempts += 1
-                        pending[ex.submit(self.downloader.fetch, r, pdf_only)] = r
+                        pending[ex.submit(self.downloader.fetch, r, pdf_only, supplements)] = r
                 fill()
                 while pending:
                     finished, _ = wait(list(pending), return_when=FIRST_COMPLETED)
@@ -209,30 +215,33 @@ class Agent:
         return counts
 
     def download_until(self, records: list[Record], target: int, oa_only: bool = False, pdf_only: bool = True,
-                       more=None, max_rounds: int = 5) -> tuple[dict, list[Record]]:
-        """Качает, пока не наберётся target статей (при pdf_only — именно PDF). Если кандидаты кончились, а цель не достигнута,
-        вызывает more(round) -> list[Record] | None: следующую, более глубокую выдачу (новые записи фильтруются от уже проверенных).
-        Останавливается, когда цель достигнута, more вернул пусто/None или исчерпаны max_rounds дополнительных раундов.
+                       more=None, max_rounds: int = 5, supplements: bool = False) -> tuple[dict, list[Record]]:
+        """Качает, пока не наберётся target статей (при pdf_only — именно PDF). target <= 0 — без цели: качаем всех кандидатов.
+        Если кандидаты кончились, а цель не достигнута, вызывает more(round) -> list[Record] | None: следующую, более глубокую выдачу
+        (новые записи фильтруются от уже проверенных). Останавливается, когда цель достигнута, more вернул пусто/None
+        или исчерпаны max_rounds дополнительных раундов.
         Возвращает (суммарные счётчики, все предложенные записи: проверенные и нет)."""
-        total = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0}
+        total = {"pdf": 0, "xml": 0, "exists": 0, "no_oa": 0, "no_pdf": 0, "failed": 0, "skipped": 0, "supp": 0}
         offered = list(records)
         seen = {k for r in offered for k in r.keys()}
         batch, rnd = list(records), 0
+        unlimited = target <= 0
         while True:
             have = total["pdf"] + total["exists"] + (0 if pdf_only else total["xml"])
-            if have >= target:
+            if not unlimited and have >= target:
                 break
             if batch:
-                c = self.download(batch, target - have, oa_only, pdf_only)
+                c = self.download(batch, 0 if unlimited else target - have, oa_only, pdf_only, supplements)
                 for k, v in c.items():
                     total[k] += v
                 have = total["pdf"] + total["exists"] + (0 if pdf_only else total["xml"])
-                if have >= target:
+                if not unlimited and have >= target:
                     break
             if more is None or rnd >= max_rounds:
                 break
             rnd += 1
-            self.log(f"\nНабрано {have} из {target}: углубляю поиск (доп. раунд {rnd} из {max_rounds})…")
+            self.log(("\nКачаю без потолка: углубляю поиск" if unlimited else f"\nНабрано {have} из {target}: углубляю поиск")
+                     + f" (доп. раунд {rnd} из {max_rounds})…")
             fresh = more(rnd) or []
             batch = []
             for r in fresh:
@@ -250,6 +259,7 @@ class Agent:
 
     # ------------------------------------------------------------ итог
     def finish(self, mode: str, specs: list[SearchSpec], records: list[Record], extra: dict | None = None) -> Path:
+        self.lib.purge_parts()                          # временные .part не должны оставаться после запуска
         self.lib.prune_empty()
         self.lib.save()
         meta = {"run_id": self.run_id, "mode": mode, "started": self.started.isoformat(timespec="seconds"),
