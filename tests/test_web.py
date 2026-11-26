@@ -518,6 +518,38 @@ class TestSupplementsApi(Tmp):
         self.assertEqual(r["added"], 2)
 
 
+class TestTagsApi(Tmp):
+    def test_tags_auto_single_and_all(self):
+        self.write_index()                                        # запись "CRISPR therapy" без тегов
+        r = self.app.post_tags_auto({"pk": "doi:10.1/x"})
+        self.assertTrue(r["tags"])
+        self.assertTrue(all(len(t) <= 80 for t in r["tags"]))
+        r2 = self.app.post_tags_auto({"all": True})               # уже помечена — новых не трогает
+        self.assertEqual(r2["tagged"], 0)
+        self.app.post_tags({"pk": "doi:10.1/x", "tags": []})
+        r3 = self.app.post_tags_auto({"all": True})
+        self.assertEqual(r3["tagged"], 1)
+
+    def test_tags_auto_errors(self):
+        self.write_index()
+        with self.assertRaises(ApiError) as cm:
+            self.app.post_tags_auto({"pk": "doi:нет/такой"})
+        self.assertEqual(cm.exception.code, 404)
+        with self.assertRaises(ApiError) as cm:
+            self.app.post_tags_auto({})
+        self.assertEqual(cm.exception.code, 400)
+
+    def test_library_returns_keywords(self):
+        lib = self.cwd / "library"
+        (lib / "pdf").mkdir(parents=True, exist_ok=True)
+        (lib / "index.json").write_text(json.dumps({"records": {"doi:10.1/k": {
+            "title": "K paper", "doi": "10.1/k", "keywords": ["Gene Editing"], "has_supp": True, "supp": []}},
+            "aliases": {}}), encoding="utf-8")
+        rec = self.app.get_library()["records"][0]
+        self.assertEqual(rec["keywords"], ["Gene Editing"])
+        self.assertTrue(rec["has_supp"])
+
+
 class TestJobs(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

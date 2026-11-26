@@ -28,7 +28,7 @@ from .wizard import interview
 DEFAULT_CFG = {
     "email": "", "tool": "litagent", "out": "library", "sources": DEFAULT_SOURCES,
     "limit_per_source": 50, "max_downloads": 20, "cache_ttl": 86400, "custom_sites": DEFAULT_FILE, "pubmed_pmc": True, "pdf_only": False,
-    "supplements": False,
+    "supplements": False, "auto_tags": False,
     "deepen_rounds": 5, "deepen_limit_cap": 1000, "folders_by_source": True, "presets_file": presets.DEFAULT_FILE,
     "download_workers": 10, "download_timeout": 25, "download_retries": 2,
     "keys": {"ncbi": "", "openalex": "", "s2": "", "core": "", "gigachat": "",
@@ -96,6 +96,8 @@ def add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--max-downloads", type=int, help="максимум успешных скачиваний за запуск (0 — без потолка: качать все найденные)")
     p.add_argument("--supplements", action="store_true", help="докачивать дополнительные материалы статей "
                                                                "(приложения, данные, медиа) в supp/<статья>/ (PMC, Europe PMC)")
+    p.add_argument("--auto-tags", action="store_true", help="проставлять скачанным статьям теги по их ключевым словам "
+                                                            "(keyword-поля источников, заголовок; ручные теги не перетираются)")
     p.add_argument("-n", "--count", type=int, metavar="N", help="скачать ровно N статей с PDF: поиск углубляется, пока не наберётся N "
                                                                "(включает --pdf-only и --max-downloads N)")
     p.add_argument("--deepen-rounds", type=int, metavar="K", help="сколько раз при --count можно углублять поиск (по умолчанию 5)")
@@ -166,6 +168,8 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["max_downloads"] = a.max_downloads
     if getattr(a, "supplements", False):
         cfg["supplements"] = True
+    if getattr(a, "auto_tags", False):
+        cfg["auto_tags"] = True
     if getattr(a, "count", None) is not None:
         cfg["max_downloads"] = a.count
     if getattr(a, "deepen_rounds", None) is not None:

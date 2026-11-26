@@ -102,6 +102,14 @@ class Library:
         self.tags[pk] = self._norm_tags(tags)
         return self.tags[pk]
 
+    def auto_tag(self, rec: Record, force: bool = False) -> list[str]:
+        """Теги по ключевым словам источника (litagent.tags); ручные теги не перетираются без force."""
+        from .tags import suggest_tags
+        pk = next((self.aliases[k] for k in rec.keys() if k in self.aliases), None) or rec.primary_key()
+        if self.tags.get(pk) and not force:
+            return self.tags[pk]
+        return self.set_tags(pk, suggest_tags(rec))
+
     def all_tags(self) -> list[str]:
         return sorted({t for ts in self.tags.values() for t in ts}, key=str.casefold)
 

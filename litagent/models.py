@@ -73,9 +73,12 @@ class Record:
     cited_by: int | None = None
     is_oa: bool | None = None
     pdf_urls: list = field(default_factory=list)
+    supp_urls: list = field(default_factory=list)  # ссылки на доп. материалы/пакеты от источника
     xml_url: str | None = None
     url: str | None = None
     sources: list = field(default_factory=list)
+    keywords: list = field(default_factory=list)   # ключевые слова источников (для авто-тегов)
+    has_supp: bool | None = None                   # есть ли у статьи доп. материалы (известно из Europe PMC / проверки)
     score: float | None = None
     file: str | None = None
     supp: list = field(default_factory=list)   # доп. материалы: [{file, name, size, origin, added}]
@@ -138,6 +141,16 @@ def merge_into(a: Record, b: Record) -> None:
     for u in b.pdf_urls:
         if u not in a.pdf_urls:
             a.pdf_urls.append(u)
+    for u in b.supp_urls:
+        if u not in a.supp_urls:
+            a.supp_urls.append(u)
+    for k in b.keywords:
+        if k not in a.keywords:
+            a.keywords.append(k)
+    if a.has_supp is None:
+        a.has_supp = b.has_supp
+    elif b.has_supp:
+        a.has_supp = True
     for s in b.sources:
         if s not in a.sources:
             a.sources.append(s)

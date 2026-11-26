@@ -31,6 +31,7 @@ class Agent:
                                    download_timeout=int(cfg.get("download_timeout", 25)),
                                    download_retries=int(cfg.get("download_retries", 2)))
         self.workers = max(1, int(cfg.get("download_workers", 10)))
+        self.auto_tags = bool(cfg.get("auto_tags", False))   # теги по ключевым словам при скачивании
         self.ctx = Ctx(self.client, cfg.get("email", ""), keys, cfg.get("tool", "litagent"), log,
                        pmc=bool(cfg.get("pubmed_pmc", True)))
         self.sources = make_sources(self.ctx)
@@ -186,6 +187,11 @@ class Agent:
             if st in ("pdf", "xml", "exists"):
                 got += 1
                 self.lib.register(r)
+                if self.auto_tags:
+                    try:
+                        self.lib.auto_tag(r)                     # теги из ключевых слов источника
+                    except Exception:  # noqa: BLE001 — теги не должны ронять скачивание
+                        pass
                 self.lib.save()                       # индекс на диске после каждого успеха: прерывание ничего не теряет
                 counts["supp"] += len(r.supp or [])
             done_n += 1

@@ -20,7 +20,7 @@ from .policy import Policy
 MAX_BYTES = 256 * 1024
 MAX_SITES = 50
 _CTRL = re.compile(r"[\x00-\x1f\x7f]+")
-_LIMITS = {"title": 80, "about": 500, "notes": 1000}
+_LIMITS = {"title": 80, "about": 500, "notes": 1000, "supp_flag": 120, "supp_path": 120, "supp_url": 400, "id_param": 120}
 
 
 def is_url(s: str) -> bool:

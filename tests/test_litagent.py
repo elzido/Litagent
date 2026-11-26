@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -1165,6 +1166,9 @@ def pmc_router(url):
                                   "PMC660/extra-table.xlsx": b"PK\x03\x04" + b"z" * 1500})
     if "oa_package/aa/bb/PMC661.tar.gz" in url:
         return 200, {}, make_tgz({"PMC661/main-article.pdf": MAIN_PDF, "PMC661/sup-table.xlsx": b"PK\x03\x04" + b"q" * 1500})
+    if "europepmc/webservices/rest/search" in url:
+        has = "Y" if "PMC660" in url else "N"
+        return 200, {}, json.dumps({"hitCount": 1, "resultList": {"result": [{"pmcid": "PMCx", "hasSuppl": has}]}}).encode()
     if "/supplementaryFiles" in url:
         return 404, {}, b""                                              # у fixture-статей zip-приложений нет
     if url in REMOTE_FILES:
@@ -1471,6 +1475,43 @@ class TestSupplements(PmcBase):
         self.assertFalse(supp_dir.exists())
         self.assertEqual(list(a.lib.root.rglob("suppfile.dat")), [])
 
+    def test_supp_urls_from_custom_site(self):
+        """Свой сайт может сообщить ссылки на доп. материалы — они скачиваются (zip/tgz распаковываются)."""
+        import io as _io
+        zip_buf = _io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("dataset.csv", "a,b\n1,2\n")
+            zf.writestr("model-weights.bin", "w" * 1500)
+        REMOTE_FILES["https://files.example.org/supp.zip"] = zip_buf.getvalue()
+        REMOTE_FILES["https://files.example.org/table.xlsx"] = b"PK\x03\x04" + b"x" * 2000
+        site = make_site(supp_path="supp", supp_flag="hasSupp", id_param="pmcid",
+                         supp_url="https://files.example.org/{id}.xlsx")
+        reg = SiteRegistry(self.sites_path)
+        reg.put(site)
+        reg.save()
+        a = self.agent(site)
+        r = Record(title="Custom site supplement paper long", doi="10.5/alpha", is_oa=True,
+                   pdf_urls=["https://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/aa/bb/x.PMC222.pdf"],
+                   supp_urls=["https://files.example.org/supp.zip", "https://files.example.org/table.xlsx"],
+                   has_supp=True)
+        self.assertEqual(a.downloader.fetch(r, supplements=True), "pdf")
+        names = {s["name"] for s in r.supp}
+        self.assertIn("dataset.csv", names)                              # zip распакован
+        self.assertIn("model-weights.bin", names)
+        self.assertIn("table.xlsx", names)                               # одиночный файл сохранён как есть
+        self.assertTrue(all((a.lib.root / s["file"]).is_file() for s in r.supp))
+        self.assertEqual(a.downloader.check_supplements(r), True)        # без сети: известно из supp_urls
+
+    def test_record_from_site_parses_supp(self):
+        site = make_site(supp_path="supp", supp_flag="hasSupp", id_param="pmcid",
+                         supp_url="https://files.example.org/{id}.zip")
+        src = CustomSource(Ctx(None, "t@e.org", {}, "litagent", lambda m: None), site)
+        item = {"title": "T" * 30, "hasSupp": True, "supp": ["https://x.org/a.pdf"], "pmcid": "PMC7"}
+        rec = src.record_from(item)
+        self.assertTrue(rec.has_supp)
+        self.assertIn("https://x.org/a.pdf", rec.supp_urls)
+        self.assertIn("https://files.example.org/PMC7.zip", rec.supp_urls)
+
     def test_stats_count_supplements(self):
         from litagent.store import Library
         REMOTE_FILES["https://files.example.org/stat.dat"] = b"x" * 5000
@@ -1481,6 +1522,80 @@ class TestSupplements(PmcBase):
         st = Library(Path(self.tmp.name, "lib")).stats()
         self.assertGreaterEqual(st["supp"], 4)
         self.assertGreaterEqual(st["supp_bytes"], 5000)
+
+    def test_check_supplements_europepmc_lite(self):
+        a = self.agent()
+        yes = Record(title="Check yes paper with long enough title", pmcid="PMC660", is_oa=True)
+        no = Record(title="Check no paper with long enough title", pmcid="PMC222", is_oa=True)
+        self.assertTrue(a.downloader.check_supplements(yes))
+        self.assertFalse(a.downloader.check_supplements(no))           # fixture: hasSuppl=N
+        self.assertIsNone(a.downloader.check_supplements(Record(title="No pmcid paper here at all friend")))
+
+    def test_has_supp_persisted_and_returned(self):
+        a = self.agent()
+        r = self.rec660()
+        a.downloader.fetch(r, supplements=True)
+        self.assertTrue(r.has_supp)
+        a.lib.register(r)
+        a.lib.save()
+        from litagent.store import Library
+        e = Library(Path(self.tmp.name, "lib")).records[r.primary_key()]
+        self.assertTrue(e["has_supp"])
+        self.assertIn("media-1.pdf", [s["name"] for s in e["supp"]])
+
+
+class TestAutoTags(unittest.TestCase):
+    """Теги по ключевым словам: разбиение мусорных keyword-строк, заголовок, сохранение в индексе."""
+
+    def test_split_keywords_breaks_phrases(self):
+        from litagent.tags import split_keywords
+        self.assertEqual(split_keywords(["Gene Editing, survey | CRISPR-Cas9; -mouse"]),
+                         ["Gene Editing", "CRISPR-Cas9", "mouse"])
+        self.assertEqual(split_keywords("Mechanisms, Crispr/cas"), ["Mechanisms", "Crispr/cas"])
+        self.assertEqual(split_keywords({"keyword": ["Deep Learning"]}), ["Deep Learning"])
+        self.assertEqual(split_keywords("2023; ; ,,, - "), [])
+
+    def test_title_phrases_no_nested_duplicates(self):
+        from litagent.tags import title_phrases
+        tags = title_phrases("Retrieval augmented generation survey")
+        self.assertIn("retrieval augmented generation", tags)
+        self.assertNotIn("retrieval augmented", tags)                  # вложенная n-грамма не дублируется
+        self.assertNotIn("survey", tags)                               # стоп-слово
+
+    def test_suggest_tags_priority(self):
+        from litagent.tags import suggest_tags
+        r = Record(title="CRISPR therapy for sickle cell disease in adults",
+                   keywords=[{"keyword": ["Gene Editing, survey"]}], abstract="")
+        tags = suggest_tags(r)
+        self.assertEqual(tags[0], "Gene Editing")                      # keywords источника в приоритете
+        self.assertTrue(all(len(t) <= 32 for t in tags))
+
+    def test_library_auto_tag_keeps_manual(self):
+        from litagent.store import Library
+        with tempfile.TemporaryDirectory() as d:
+            lib = Library(Path(d, "lib"))
+            r = Record(title="Graph neural networks for molecules", doi="10.1/t", keywords=["GNN"])
+            lib.register(r)
+            self.assertEqual(lib.auto_tag(r), ["GNN", "graph neural networks", "molecules"])
+            lib.set_tags(r.primary_key(), ["моё"])
+            self.assertEqual(lib.auto_tag(r), ["моё"])                 # ручные не перетираются
+            self.assertIn("GNN", lib.auto_tag(r, force=True))
+
+    def test_agent_autotags_on_download(self):
+        with tempfile.TemporaryDirectory() as d:
+            from litagent.agent import Agent
+            a = Agent({"out": d, "email": "t@e.org", "auto_tags": True}, lambda m: None)
+
+            def fake_fetch(rec, pdf_only=False, supplements=False):
+                dest = a.lib.path_for(rec, ".pdf")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(b"%PDF-1.4\n" + b"x" * 3000)
+                rec.file = str(dest.relative_to(a.lib.root))
+                return "pdf"
+            r = Record(title="Paper about CRISPR editing", doi="10.1/at", keywords=["Gene Editing"])
+            with mock.patch.object(a.downloader, "fetch", fake_fetch):
+                a.download([r], 1)
+            self.assertIn("Gene Editing", a.lib.tags.get(r.primary_key(), []))
 
 
 class TestSingleSite(CustomBase):

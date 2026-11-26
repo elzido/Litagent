@@ -24,6 +24,7 @@ PMC_OA = "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi"       # офици�
 PMC_FTP_HTTPS = "https://ftp.ncbi.nlm.nih.gov/"
 PMC_TGZ_MAX = 80 * 1024 * 1024                                       # пакет статьи больше — не качаем
 EUPMC_SUPP = "https://www.ebi.ac.uk/europepmc/webservices/rest/{}/supplementaryFiles"
+EUPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 SUPP_MAX_FILE = 40 * 1024 * 1024                                     # один файл доп. материалов
 SUPP_MAX_TOTAL = 200 * 1024 * 1024                                   # все доп. материалы статьи
 SUPP_MAX_FILES = 40
@@ -250,6 +251,8 @@ class Downloader:
         if existing and (not pdf_only or str(existing["file"]).lower().endswith(".pdf")):
             rec.file = existing["file"]
             rec.supp = list(existing.get("supp") or [])
+            if existing.get("has_supp") is not None:
+                rec.has_supp = bool(existing["has_supp"])
             if supplements and rec.pmcid and not rec.supp:
                 try:
                     self.fetch_supplements(rec)
@@ -307,11 +310,13 @@ class Downloader:
             rec.file = str(dest.relative_to(self.lib.root))
             if tgz:
                 if supplements:                                    # доп. материалы из того же пакета
-                    self._supp_from_tgz(rec, tgz, pkg_main[0] if pkg_main else None)
+                    if self._supp_from_tgz(rec, tgz, pkg_main[0] if pkg_main else None):
+                        rec.has_supp = True
                 tgz.unlink(missing_ok=True)
-            elif supplements and rec.pmcid:
+            elif supplements and (rec.pmcid or rec.supp_urls):
                 try:
-                    self.fetch_supplements(rec)
+                    if self.fetch_supplements(rec):
+                        rec.has_supp = True
                 except Exception:  # noqa: BLE001 — доп. материалы не должны ронять скачивание
                     pass
             return kind
@@ -331,7 +336,34 @@ class Downloader:
         rec.supp = [s for s in rec.supp if s.get("file") != entry["file"]] + [entry]
         return entry
 
-    def _supp_from_tgz(self, rec: Record, tgz: Path, main_name: str) -> int:
+    def check_supplements(self, rec: Record) -> bool | None:
+        """Есть ли у статьи доп. материалы: сначала ссылки, которые дал источник (в т.ч. свой сайт),
+        иначе — дешёвый lite-запрос к Europe PMC (ответ попадает в HTTP-кэш) + признак OA-пакета PMC.
+        None — проверить нельзя."""
+        if rec.supp_urls:
+            rec.has_supp = True
+            return True
+        if rec.has_supp is not None:
+            return bool(rec.has_supp)
+        if not rec.pmcid:
+            return None
+        try:
+            r = self.client.get(EUPMC_SEARCH, {"query": f"PMCID:{rec.pmcid}", "format": "json",
+                                               "resultType": "lite", "pageSize": 1})
+            if r.status == 200:
+                res = (r.json().get("resultList") or {}).get("result") or []
+                if res:
+                    rec.has_supp = res[0].get("hasSuppl") == "Y"
+                    return bool(rec.has_supp)
+        except (HttpError, Blocked, ValueError):
+            pass
+        for kind, _ in self._pmc_oa(rec.pmcid):
+            if kind == "tgz":
+                rec.has_supp = True
+                return True
+        return rec.has_supp
+
+    def _supp_from_tgz(self, rec: Record, tgz: Path, main_name: str | None) -> int:
         """Индекс не сохраняем: вызывающий поток (agent.download) запишет rec.supp сам."""
         dest_dir = self.lib.supp_dir_for(rec.file)
         have = {(self.lib.root / s["file"]).resolve() for s in rec.supp}
@@ -342,13 +374,50 @@ class Downloader:
         return added
 
     def fetch_supplements(self, rec: Record) -> int:
-        """Докачать доп. материалы для уже скачанной статьи: пакет PMC (если есть PMCID) и zip Europe PMC.
-        Возвращает число новых файлов."""
+        """Докачать доп. материалы для уже скачанной статьи: ссылки самого источника (rec.supp_urls),
+        пакет PMC (если есть PMCID) и zip Europe PMC. Возвращает число новых файлов."""
         if not rec.file:
             return 0
         dest_dir = self.lib.supp_dir_for(rec.file)
         have = {(self.lib.root / s["file"]).resolve() for s in rec.supp}
         added = 0
+
+        for url in (rec.supp_urls or [])[:SUPP_MAX_FILES]:            # сначала то, что дал источник (в т.ч. свой сайт)
+            url = self.policy.rewrite(url)
+            ok, why = self.policy.url_allowed(url)
+            if not ok:
+                continue                                              # запрещённый политикой адрес источника пропускается
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            name = self.lib.supp_name(Path(urlparse(url).path).name or "supplement")
+            tmp = dest_dir / (name + ".part")
+            try:
+                resp = self.client.download(url, tmp, max_bytes=SUPP_MAX_TOTAL,
+                                           headers={"Accept": "application/zip,application/gzip,*/*;q=0.5"})
+            except (Blocked, HttpError):
+                tmp.unlink(missing_ok=True)
+                continue
+            if resp.status != 200 or tmp.stat().st_size <= 0:
+                tmp.unlink(missing_ok=True)
+                continue
+            if zipfile.is_zipfile(tmp) or tarfile.is_tarfile(tmp):
+                items = (extract_supp_from_zip(tmp, dest_dir) if zipfile.is_zipfile(tmp)
+                         else extract_supp_from_tgz(tmp, dest_dir))
+                prefix = "source-zip" if zipfile.is_zipfile(tmp) else "source-tgz"
+                got = sum(1 for item in items
+                          if self._register_supp(rec, dest_dir / item["file"], prefix + ":" + self.policy.host(url), have))
+                if got:                                                 # архив распакован — служебный файл не нужен
+                    tmp.unlink(missing_ok=True)
+                    added += got
+                    continue
+            final = _reserve(dest_dir, name)                           # одиночный файл (xlsx, csv, pdf-приложение…)
+            os.replace(tmp, final)
+            if self._register_supp(rec, final, "source:" + self.policy.host(url), have):
+                added += 1
+        if not rec.pmcid:
+            if added:
+                self.lib.register(rec)
+                self.lib.save()
+            return added
 
         if rec.pmcid and getattr(self.ctx, "pmc", True):
             for kind, url in self._pmc_oa(rec.pmcid):
@@ -408,4 +477,6 @@ class Downloader:
             part.unlink(missing_ok=True)
             raise HttpError(f"HTTP {resp.status}" if resp.status != 200 else "пустой файл")
         os.replace(part, tmp)
-        return self._register_supp(rec, tmp, "manual:" + self.policy.host(url))
+        entry = self._register_supp(rec, tmp, "manual:" + self.policy.host(url))
+        rec.has_supp = True
+        return entry

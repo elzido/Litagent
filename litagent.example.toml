@@ -10,6 +10,7 @@ download_timeout = 25              # сек на файл (простой сок
 download_retries = 2               # попыток на файл (обычные запросы API: 5)
 pdf_only = false                   # true: оставлять только статьи с реально скачанным PDF (как --pdf-only)
 supplements = false                # true: докачивать доп. материалы статей (приложения, данные) в supp/ (как --supplements)
+auto_tags = false                  # true: теги скачанных статей по их ключевым словам (как --auto-tags)
 pubmed_pmc = true                  # PubMed ищет ещё и в PMC и качает оттуда OA-PDF (false — выключить)
 custom_sites = "custom_sites.json"   # свои сайты (создаётся командой `sites add`)
 max_downloads = 20                 # потолок успешных скачиваний за запуск (--max-downloads; 0 — без потолка: качать все найденные)

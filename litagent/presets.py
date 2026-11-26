@@ -15,12 +15,13 @@ from pathlib import Path
 DEFAULT_FILE = "presets.json"
 NAME_RE = re.compile(r"^[\w.-]{1,40}$", re.U)
 LIST_KEYS = ("query", "group", "exclude", "raw", "arxiv_cat")
-FLAG_KEYS = ("oa_only", "title_only", "strict", "no_download", "pdf_only", "no_pmc", "flat", "supplements")
+FLAG_KEYS = ("oa_only", "title_only", "strict", "no_download", "pdf_only", "no_pmc", "flat", "supplements", "auto_tags")
 VALUE_KEYS = ("topics_file", "sources", "site", "limit", "year_from", "year_to", "workers",
               "max_downloads", "count", "deepen_rounds")
 INT_KEYS = {"limit", "year_from", "year_to", "workers", "max_downloads", "count", "deepen_rounds"}
 FLAGS_CLI = {"oa_only": "--oa-only", "title_only": "--title-only", "strict": "--strict", "no_download": "--no-download",
-             "pdf_only": "--pdf-only", "no_pmc": "--no-pmc", "flat": "--flat", "supplements": "--supplements"}
+             "pdf_only": "--pdf-only", "no_pmc": "--no-pmc", "flat": "--flat", "supplements": "--supplements",
+             "auto_tags": "--auto-tags"}
 LISTS_CLI = {"query": "-q", "group": "--group", "exclude": "--exclude", "raw": "--raw", "arxiv_cat": "--arxiv-cat"}
 VALUES_CLI = {"topics_file": "--topics-file", "sources": "--sources", "site": "--site", "limit": "--limit",
               "year_from": "--year-from", "year_to": "--year-to", "workers": "--workers",

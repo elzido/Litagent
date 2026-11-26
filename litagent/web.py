@@ -98,6 +98,7 @@ COMMENTS = {
     "download_retries": "попыток на файл (обычные запросы API: 5)",
     "pdf_only": "true: оставлять только статьи с реально скачанным PDF (как --pdf-only)",
     "supplements": "true: докачивать доп. материалы статей (приложения, данные) в supp/<статья>/ (как --supplements)",
+    "auto_tags": "true: проставлять скачанным статьям теги по их ключевым словам (как --auto-tags; ручные теги не перетираются)",
     "pubmed_pmc": "PubMed ищет ещё и в PMC и качает оттуда OA-PDF (false — выключить)",
     "custom_sites": "свои сайты (создаётся командой `sites add`)",
     "max_downloads": "потолок успешных скачиваний за запуск (--max-downloads; 0 — без потолка: качать все найденные)",
@@ -351,7 +352,7 @@ class JobManager:
 # ---------------------------------------------------------------- аргументы CLI из формы поиска
 FLAGS = {"oa_only": "--oa-only", "title_only": "--title-only", "strict": "--strict", "pdf_only": "--pdf-only",
          "no_download": "--no-download", "no_pmc": "--no-pmc", "flat": "--flat", "dry_run": "--dry-run",
-         "supplements": "--supplements"}
+         "supplements": "--supplements", "auto_tags": "--auto-tags"}
 NUMS = {"year_from": "--year-from", "year_to": "--year-to", "limit": "--limit", "count": "--count",
         "max_downloads": "--max-downloads", "workers": "--workers", "deepen_rounds": "--deepen-rounds"}
 
@@ -569,7 +570,8 @@ class WebApp:
         for pk, e in lib.records.items():
             f = e.get("file")
             records.append({**e, "pk": pk, "tags": lib.tags.get(pk, []),
-                            "supp": e.get("supp") or [],
+                            "supp": e.get("supp") or [], "keywords": e.get("keywords") or [],
+                            "has_supp": e.get("has_supp"),
                             "has_file": bool(f and (root / f).is_file())})
         records.sort(key=lambda r: (-(r.get("year") or 0), (r.get("title") or "").casefold()))
         return {"root": str(root), "stats": lib.stats(), "records": records, "all_tags": lib.all_tags()}
@@ -586,6 +588,28 @@ class WebApp:
             raise ApiError(404, f"Нет записи {pk} в библиотеке.") from None
         lib.save()
         return {"pk": pk, "tags": clean, "all_tags": lib.all_tags()}
+
+    def post_tags_auto(self, data: dict) -> dict:
+        """Теги по ключевым словам: одной записи (pk) или всех без тегов (all=true)."""
+        lib = Library(self.library_root())
+        if data.get("all"):
+            touched = 0
+            for pk, e in list(lib.records.items()):
+                if lib.tags.get(pk):
+                    continue
+                lib.auto_tag(Record.from_dict(e), force=bool(data.get("force")))
+                touched += 1
+            lib.save()
+            return {"tagged": touched, "all_tags": lib.all_tags()}
+        pk = data.get("pk")
+        if not isinstance(pk, str):
+            raise ApiError(400, "Ожидается {pk: строка} или {all: true}.")
+        e = lib.records.get(pk)
+        if e is None:
+            raise ApiError(404, f"Нет записи {pk} в библиотеке.")
+        tags = lib.auto_tag(Record.from_dict(e), force=bool(data.get("force")))
+        lib.save()
+        return {"pk": pk, "tags": tags, "all_tags": lib.all_tags()}
 
     def post_library_delete(self, data: dict) -> dict:
         keys = data.get("keys")
@@ -633,14 +657,33 @@ class WebApp:
                               download_retries=int(cfg.get("download_retries", 2)))
         ctx = Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None,
                   pmc=bool(cfg.get("pubmed_pmc", True)))
+        dl = Downloader(ctx, lib, pol)
         try:
-            added = Downloader(ctx, lib, pol).fetch_supplements(rec)
+            added = dl.fetch_supplements(rec)
         except Exception as e:  # noqa: BLE001 — сетевая ошибка должна вернуться текстом, а не 500
             raise ApiError(502, f"{type(e).__name__}: {str(e)[:200]}") from None
         if added:
+            rec.has_supp = True
             lib.register(rec)
             lib.save()
-        return {"pk": pk, "added": added, "supp": lib.supp_list(pk)}
+        return {"pk": pk, "added": added, "has_supp": rec.has_supp, "supp": lib.supp_list(pk)}
+
+    def post_supp_check(self, data: dict) -> dict:
+        """Есть ли у статьи доп. материалы (дешёвый lite-запрос Europe PMC, кэшируется)."""
+        pk = data.get("pk")
+        if not isinstance(pk, str):
+            raise ApiError(400, "Ожидается {pk: строка}.")
+        lib, rec = self._library_record(pk)
+        cfg = self.cfg()
+        pol = Policy()
+        client = PoliteClient(pol, f"litagent/1.0 (mailto:{cfg.get('email') or 'unknown'})",
+                              cache_dir=lib.cache_dir, retries=2)
+        ctx = Ctx(client, cfg.get("email", ""), cfg.get("keys", {}), "litagent", lambda m: None,
+                  pmc=bool(cfg.get("pubmed_pmc", True)))
+        found = Downloader(ctx, lib, pol).check_supplements(rec)
+        lib.register(rec)
+        lib.save()
+        return {"pk": pk, "has_supp": found}
 
     def post_supp_url(self, data: dict) -> dict:
         """Вручную добавить файл доп. материалов по URL."""
@@ -979,10 +1022,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(200, app.post_library_delete(data))
                 elif path == "/api/library/supplements/fetch":
                     self._json(200, app.post_supp_fetch(data))
+                elif path == "/api/library/supplements/check":
+                    self._json(200, app.post_supp_check(data))
                 elif path == "/api/library/supplements/url":
                     self._json(200, app.post_supp_url(data))
                 elif path == "/api/library/supplements/delete":
                     self._json(200, app.post_supp_delete(data))
+                elif path == "/api/library/tags/auto":
+                    self._json(200, app.post_tags_auto(data))
                 elif path == "/api/runs/delete":
                     self._json(200, app.post_runs_delete(data))
                 elif path == "/api/cache/clear":
